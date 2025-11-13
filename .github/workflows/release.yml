@@ -106,11 +106,11 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
       - name: Generate changelog
-        uses: git-changelog/git-changelog-action@v1
+        uses: requarks/changelog-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          tag: v${{ steps.version.outputs.version }}
           output: CHANGELOG.md
-          template: keepachangelog
 
       - name: Generate release notes
         id: release_notes
