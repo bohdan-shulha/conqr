@@ -4,6 +4,10 @@
   "description": "Configuration file for conqr - a dead-simple TUI process runner",
   "type": "object",
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for IDE validation"
+    },
     "commands": {
       "description": "Commands to run concurrently. Can be an array of strings, an object with name-command pairs, or an array of objects with name and command properties.",
       "oneOf": [
