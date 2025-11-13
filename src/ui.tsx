@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { render, Box, Text, useInput, useApp } from 'ink';
 import stripAnsi from 'strip-ansi';
 import { CommandInfo } from './cli.js';
@@ -89,22 +89,52 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
 
   const sidebarWidth = 30;
 
+  const prevLogsRef = useRef<LogEntry[]>([]);
+  const prevStatusesRef = useRef<Map<number, string>>(new Map());
+
   useEffect(() => {
     const updateStatuses = () => {
       const newStatuses = new Map<number, string>();
       commands.forEach(cmd => {
         newStatuses.set(cmd.id, processManager.getStatus(cmd.id));
       });
-      setStatuses(newStatuses);
+
+      const prevStatuses = prevStatusesRef.current;
+      let hasChanged = false;
+      if (prevStatuses.size !== newStatuses.size) {
+        hasChanged = true;
+      } else {
+        for (const [id, status] of newStatuses) {
+          if (prevStatuses.get(id) !== status) {
+            hasChanged = true;
+            break;
+          }
+        }
+      }
+
+      if (hasChanged) {
+        prevStatusesRef.current = newStatuses;
+        setStatuses(newStatuses);
+      }
     };
 
     const updateLogs = () => {
       const unifiedView = selectedIndex === ALL_PROCESSES_INDEX;
-      if (unifiedView) {
-        setLogs([...logBuffer.getUnifiedLogs()]);
-      } else {
-        const selectedCmd = commands[selectedIndex];
-        setLogs([...logBuffer.getLogs(selectedCmd.id)]);
+      const bufferLogs = unifiedView
+        ? logBuffer.getUnifiedLogs()
+        : (() => {
+            const selectedCmd = commands[selectedIndex];
+            return logBuffer.getLogs(selectedCmd.id);
+          })();
+
+      const prevLogs = prevLogsRef.current;
+      const prevLength = prevLogs.length;
+      const newLength = bufferLogs.length;
+
+      if (prevLength !== newLength || (newLength > 0 && prevLogs[prevLength - 1]?.timestamp !== bufferLogs[newLength - 1]?.timestamp)) {
+        const newLogs = [...bufferLogs];
+        prevLogsRef.current = newLogs;
+        setLogs(newLogs);
       }
     };
 
@@ -114,13 +144,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
     updateStatuses();
     updateLogs();
 
-    const interval = setInterval(() => {
-      updateLogs();
-      updateStatuses();
-    }, 100);
-
     return () => {
-      clearInterval(interval);
       processManager.removeAllListeners('status-change');
       processManager.removeAllListeners('log');
     };
@@ -128,7 +152,22 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
 
   useEffect(() => {
     setLogScrollOffset(Infinity);
+    prevLogsRef.current = [];
   }, [selectedIndex]);
+
+  const prevLogsLengthRef = useRef<number>(0);
+  const displayHeight = (process.stdout.rows || 24) - 1;
+
+  useEffect(() => {
+    const wasAtBottom = logScrollOffset === Infinity ||
+      (logScrollOffset >= logs.length - displayHeight && logs.length > displayHeight);
+
+    if (wasAtBottom && logs.length > prevLogsLengthRef.current && logScrollOffset !== Infinity) {
+      setLogScrollOffset(Infinity);
+    }
+
+    prevLogsLengthRef.current = logs.length;
+  }, [logs.length, logScrollOffset, displayHeight]);
 
   useInput((input: string, key: any) => {
     if (key.leftArrow && focusedPane === 'main') {
@@ -202,20 +241,13 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
   });
 
   const unifiedView = selectedIndex === ALL_PROCESSES_INDEX;
-  const displayHeight = (process.stdout.rows || 24) - 1;
-  let startIndex: number;
 
   const wasAtBottom = logScrollOffset === Infinity ||
     (logScrollOffset >= logs.length - displayHeight && logs.length > displayHeight);
 
-  if (wasAtBottom) {
-    startIndex = Math.max(0, logs.length - displayHeight);
-    if (logScrollOffset !== Infinity && logs.length > 0) {
-      setLogScrollOffset(Infinity);
-    }
-  } else {
-    startIndex = Math.min(logScrollOffset, Math.max(0, logs.length - displayHeight));
-  }
+  const startIndex = wasAtBottom
+    ? Math.max(0, logs.length - displayHeight)
+    : Math.min(logScrollOffset, Math.max(0, logs.length - displayHeight));
 
   const displayLogs = logs.slice(startIndex, startIndex + displayHeight);
 
