@@ -87,6 +87,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Get previous tag
+        id: previous_tag
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          echo "tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+
       - name: Commit version bump
         run: |
           git add package.json package-lock.json
@@ -99,10 +105,52 @@ jobs:
           BRANCH=$(git rev-parse --abbrev-ref HEAD)
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
+      - name: Generate changelog
+        uses: git-changelog/git-changelog-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          output: CHANGELOG.md
+          template: keepachangelog
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          if [ -f CHANGELOG.md ]; then
+            RELEASE_NOTES=$(awk '/^## \[${{ steps.version.outputs.version }}\]/,/^## \[/{if (!/^## \[${{ steps.version.outputs.version }}\]/) exit; if (/^## \[${{ steps.version.outputs.version }}\]/) next} /^## \[${{ steps.version.outputs.version }}\]/,/^## \[/{print}' CHANGELOG.md | sed '/^## \[/d' | head -n -1)
+            if [ -z "$RELEASE_NOTES" ] || [ "$RELEASE_NOTES" = "" ]; then
+              if [ -n "${{ steps.previous_tag.outputs.tag }}" ]; then
+                RELEASE_NOTES=$(git log ${{ steps.previous_tag.outputs.tag }}..HEAD --pretty=format:"- %s" | head -20)
+              else
+                RELEASE_NOTES=$(git log --pretty=format:"- %s" | head -20)
+              fi
+            fi
+          else
+            if [ -n "${{ steps.previous_tag.outputs.tag }}" ]; then
+              RELEASE_NOTES=$(git log ${{ steps.previous_tag.outputs.tag }}..HEAD --pretty=format:"- %s" | head -20)
+            else
+              RELEASE_NOTES=$(git log --pretty=format:"- %s" | head -20)
+            fi
+          fi
+          if [ -z "$RELEASE_NOTES" ] || [ "$RELEASE_NOTES" = "" ]; then
+            RELEASE_NOTES="See [CHANGELOG.md](https://github.com/bohdan-shulha/conqr/blob/main/CHANGELOG.md) for details."
+          fi
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Commit changelog
+        run: |
+          if [ -f CHANGELOG.md ]; then
+            git add CHANGELOG.md
+            git commit -m "docs: update changelog for v${{ steps.version.outputs.version }}" || exit 0
+            git tag -d "v${{ steps.version.outputs.version }}" || true
+            git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          fi
+
       - name: Push changes and tag
         run: |
           git push origin ${{ steps.branch.outputs.branch }}
-          git push origin "v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}" --force
 
       - name: Publish to npm
         run: npm publish
@@ -115,7 +163,7 @@ jobs:
           body: |
             ## Changes
 
-            See [CHANGELOG.md](https://github.com/bohdan-shulha/conqr/blob/main/CHANGELOG.md) for details.
+            ${{ steps.release_notes.outputs.notes }}
 
             ## Installation
 
