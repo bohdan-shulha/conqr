@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { render, Box, Text, useInput, useApp } from 'ink';
+import stripAnsi from 'strip-ansi';
 import { CommandInfo } from './cli.js';
 import { ProcessManager } from './process-manager.js';
 import { LogBuffer, LogEntry } from './log-buffer.js';
@@ -323,7 +324,7 @@ function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPa
       </Box>
       <Box flexDirection="column" width={width} height={logAreaHeight}>
         {logs.slice(0, logAreaHeight).map((log, i) => {
-          let line = log.line;
+          let line = stripAnsi(log.line);
           if (unifiedView && log.processId !== undefined) {
             const cmd = commands.find(c => c.id === log.processId);
             const prefix = `[${cmd ? cmd.name : log.processId}] `;

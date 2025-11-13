@@ -1,6 +1,5 @@
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { platform } from 'os';
 import { CommandInfo } from './cli.js';
 import { LogBuffer } from './log-buffer.js';
 
@@ -43,15 +42,9 @@ export class ProcessManager extends EventEmitter {
   startCommand(commandInfo: CommandInfo): ChildProcess {
     const { id, name, command } = commandInfo;
 
-    const parts = command.split(/\s+/);
-    const cmd = parts[0];
-    const args = parts.slice(1);
-
-    const isWindows = platform() === 'win32';
-    const proc = spawn(cmd, args, {
+    const proc = spawn(command, {
       shell: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: !isWindows
+      stdio: ['ignore', 'pipe', 'pipe']
     });
 
     proc.stdout?.setEncoding('utf8');
@@ -94,16 +87,17 @@ export class ProcessManager extends EventEmitter {
     });
 
     proc.on('exit', (code: number | null) => {
-      this.processes.set(id, { ...commandInfo, status: code === 0 ? 'stopped' : 'error', process: proc, pid: proc.pid });
+      const procInfo = this.processes.get(id);
+      if (procInfo) {
+        procInfo.status = code === 0 ? 'stopped' : 'error';
+        procInfo.pid = proc.pid;
+      }
       this.emit('status-change', { processId: id, status: code === 0 ? 'stopped' : 'error' } as StatusChangeEvent);
     });
 
-    this.processes.set(id, { ...commandInfo, status: 'running', process: proc, pid: proc.pid });
+    const procInfo: ProcessInfo = { ...commandInfo, status: 'running', process: proc, pid: proc.pid };
+    this.processes.set(id, procInfo);
     this.emit('status-change', { processId: id, status: 'running' } as StatusChangeEvent);
-
-    if (!isWindows) {
-      proc.unref();
-    }
 
     return proc;
   }
@@ -128,21 +122,6 @@ export class ProcessManager extends EventEmitter {
   private killProcess(procInfo: ProcessInfo, signal: NodeJS.Signals): void {
     if (!procInfo.process || procInfo.process.killed) {
       return;
-    }
-
-    const isWindows = platform() === 'win32';
-
-    if (!isWindows && procInfo.pid) {
-      try {
-        process.kill(-procInfo.pid, signal);
-        return;
-      } catch {
-        try {
-          process.kill(procInfo.pid, signal);
-          return;
-        } catch {
-        }
-      }
     }
 
     try {
