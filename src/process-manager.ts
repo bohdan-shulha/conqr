@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import { platform } from 'os';
 import { CommandInfo } from './cli.js';
 import { LogBuffer } from './log-buffer.js';
 
@@ -8,6 +9,7 @@ export type ProcessStatus = 'running' | 'stopped' | 'error' | 'unknown';
 interface ProcessInfo extends CommandInfo {
   status: ProcessStatus;
   process: ChildProcess;
+  pid?: number;
 }
 
 interface ProcessBuffer {
@@ -45,9 +47,11 @@ export class ProcessManager extends EventEmitter {
     const cmd = parts[0];
     const args = parts.slice(1);
 
+    const isWindows = platform() === 'win32';
     const proc = spawn(cmd, args, {
       shell: true,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: !isWindows
     });
 
     proc.stdout?.setEncoding('utf8');
@@ -85,17 +89,21 @@ export class ProcessManager extends EventEmitter {
 
     proc.on('error', (err: Error) => {
       this.logBuffer.addLog(id, `Process error: ${err.message}`, 'stderr');
-      this.processes.set(id, { ...commandInfo, status: 'error', process: proc });
+      this.processes.set(id, { ...commandInfo, status: 'error', process: proc, pid: proc.pid });
       this.emit('status-change', { processId: id, status: 'error' } as StatusChangeEvent);
     });
 
     proc.on('exit', (code: number | null) => {
-      this.processes.set(id, { ...commandInfo, status: code === 0 ? 'stopped' : 'error', process: proc });
+      this.processes.set(id, { ...commandInfo, status: code === 0 ? 'stopped' : 'error', process: proc, pid: proc.pid });
       this.emit('status-change', { processId: id, status: code === 0 ? 'stopped' : 'error' } as StatusChangeEvent);
     });
 
-    this.processes.set(id, { ...commandInfo, status: 'running', process: proc });
+    this.processes.set(id, { ...commandInfo, status: 'running', process: proc, pid: proc.pid });
     this.emit('status-change', { processId: id, status: 'running' } as StatusChangeEvent);
+
+    if (!isWindows) {
+      proc.unref();
+    }
 
     return proc;
   }
@@ -117,17 +125,40 @@ export class ProcessManager extends EventEmitter {
     return statuses;
   }
 
+  private killProcess(procInfo: ProcessInfo, signal: NodeJS.Signals): void {
+    if (!procInfo.process || procInfo.process.killed) {
+      return;
+    }
+
+    const isWindows = platform() === 'win32';
+
+    if (!isWindows && procInfo.pid) {
+      try {
+        process.kill(-procInfo.pid, signal);
+        return;
+      } catch {
+        try {
+          process.kill(procInfo.pid, signal);
+          return;
+        } catch {
+        }
+      }
+    }
+
+    try {
+      procInfo.process.kill(signal);
+    } catch {
+    }
+  }
+
   killAll(): void {
     this.processes.forEach((procInfo) => {
+      this.killProcess(procInfo, 'SIGKILL');
+    });
+
+    this.processes.forEach((procInfo) => {
       if (procInfo.process && !procInfo.process.killed) {
-        try {
-          procInfo.process.kill('SIGKILL');
-        } catch (err) {
-          try {
-            procInfo.process.kill('SIGTERM');
-          } catch (e) {
-          }
-        }
+        this.killProcess(procInfo, 'SIGTERM');
       }
     });
   }
