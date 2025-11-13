@@ -97,7 +97,6 @@ jobs:
         run: |
           git add package.json package-lock.json
           git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
-          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
 
       - name: Get branch name
         id: branch
@@ -106,11 +105,18 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
       - name: Generate changelog
+        id: changelog
         uses: requarks/changelog-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag: v${{ steps.version.outputs.version }}
-          output: CHANGELOG.md
+          fromTag: ${{ steps.previous_tag.outputs.tag }}
+          toTag: HEAD
+          writeToFile: true
+          changelogFilePath: CHANGELOG.md
+
+      - name: Create release tag
+        run: |
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
 
       - name: Generate release notes
         id: release_notes
