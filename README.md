@@ -65,6 +65,22 @@ conqr
 
 CLI arguments take precedence over the config file if both are provided.
 
+### JSON Schema
+
+For IDE autocomplete and validation, add a `$schema` reference to your config file:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/bohdan-shulha/conqr/main/conqr.schema.json",
+  "commands": [
+    "npm run dev",
+    "npm run build"
+  ]
+}
+```
+
+The schema file is also available in the npm package at `node_modules/conqr/conqr.schema.json` for local reference.
+
 ## Demo
 
 Try it with the included demo scripts:

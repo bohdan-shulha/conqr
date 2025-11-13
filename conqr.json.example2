@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/bohdan-shulha/conqr/main/conqr.schema.json",
   "commands": {
     "Dev Server": "npm run dev",
     "Build Process": "npm run build",
