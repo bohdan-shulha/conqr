@@ -179,15 +179,69 @@ export class ProcessManager extends EventEmitter {
     }
   }
 
-  killAll(): void {
-    this.processes.forEach((procInfo) => {
-      this.killProcess(procInfo, 'SIGKILL');
-    });
+  async killAll(): Promise<void> {
+    const killPromises: Promise<void>[] = [];
 
     this.processes.forEach((procInfo) => {
-      if (procInfo.process && !procInfo.process.killed) {
-        this.killProcess(procInfo, 'SIGTERM');
+      if (!procInfo.process || procInfo.process.killed) {
+        return;
       }
+
+      const promise = new Promise<void>((resolve) => {
+        let resolved = false;
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        }, 1000);
+
+        const onExit = () => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            resolve();
+          }
+        };
+
+        procInfo.process.once('exit', onExit);
+        this.killProcess(procInfo, 'SIGTERM');
+      });
+      killPromises.push(promise);
     });
+
+    await Promise.all(killPromises);
+
+    const forceKillPromises: Promise<void>[] = [];
+    this.processes.forEach((procInfo) => {
+      if (!procInfo.process || procInfo.process.killed) {
+        return;
+      }
+
+      this.killProcess(procInfo, 'SIGKILL');
+
+      const promise = new Promise<void>((resolve) => {
+        let resolved = false;
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        }, 500);
+
+        const onExit = () => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            resolve();
+          }
+        };
+
+        procInfo.process.once('exit', onExit);
+      });
+      forceKillPromises.push(promise);
+    });
+
+    await Promise.all(forceKillPromises);
   }
 }

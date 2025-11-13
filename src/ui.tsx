@@ -235,8 +235,9 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
     } else if (key.end && focusedPane === 'main') {
       setLogScrollOffset(Infinity);
     } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
-      processManager.killAll();
-      exit();
+      processManager.killAll().then(() => {
+        exit();
+      });
     }
   });
 
@@ -453,12 +454,20 @@ function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPa
 export function renderTUI(commands: CommandInfo[], processManager: ProcessManager, logBuffer: LogBuffer) {
   processManager.startAll(commands);
 
-  const cleanup = () => {
-    processManager.killAll();
+  const cleanup = async () => {
+    await processManager.killAll();
   };
 
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
+  process.on('SIGINT', () => {
+    cleanup().then(() => {
+      process.exit(0);
+    });
+  });
+  process.on('SIGTERM', () => {
+    cleanup().then(() => {
+      process.exit(0);
+    });
+  });
 
   const { waitUntilExit } = render(
     <TUI commands={commands} processManager={processManager} logBuffer={logBuffer} />
