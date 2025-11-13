@@ -39,6 +39,25 @@ export class ProcessManager extends EventEmitter {
     this.buffers = new Map();
   }
 
+  private detectError(line: string): boolean {
+    const hasRedAnsi = /\x1b\[31m|\x1b\[91m|\x1b\[38;5;1m/.test(line);
+    const errorPatterns = [
+      /SyntaxError/i,
+      /TypeError/i,
+      /ReferenceError/i,
+      /Error:/i,
+      /Error\s+at/i,
+      /FATAL/i,
+      /CRITICAL/i,
+      /failed/i,
+      /failure/i,
+      /cannot/i,
+      /uncaught/i,
+      /unhandled/i,
+    ];
+    return hasRedAnsi || errorPatterns.some(pattern => pattern.test(line));
+  }
+
   startCommand(commandInfo: CommandInfo): ChildProcess {
     const { id, name, command } = commandInfo;
 
@@ -62,6 +81,9 @@ export class ProcessManager extends EventEmitter {
         if (line.length > 0) {
           this.logBuffer.addLog(id, line, 'stdout');
           this.emit('log', { processId: id, line, source: 'stdout' } as LogEvent);
+          if (this.detectError(line)) {
+            this.updateStatusToError(id);
+          }
         }
       });
     });
@@ -76,6 +98,9 @@ export class ProcessManager extends EventEmitter {
         if (line.length > 0) {
           this.logBuffer.addLog(id, line, 'stderr');
           this.emit('log', { processId: id, line, source: 'stderr' } as LogEvent);
+          if (this.detectError(line)) {
+            this.updateStatusToError(id);
+          }
         }
       });
     });
@@ -117,6 +142,14 @@ export class ProcessManager extends EventEmitter {
       statuses.set(id, procInfo.status);
     });
     return statuses;
+  }
+
+  private updateStatusToError(processId: number): void {
+    const procInfo = this.processes.get(processId);
+    if (procInfo && procInfo.status === 'running') {
+      procInfo.status = 'error';
+      this.emit('status-change', { processId, status: 'error' } as StatusChangeEvent);
+    }
   }
 
   private killProcess(procInfo: ProcessInfo, signal: NodeJS.Signals): void {

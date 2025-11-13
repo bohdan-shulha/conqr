@@ -5,6 +5,70 @@ import { CommandInfo } from './cli.js';
 import { ProcessManager } from './process-manager.js';
 import { LogBuffer, LogEntry } from './log-buffer.js';
 
+function detectAnsiColor(line: string): string | null {
+  const ansiColorRegex = /\x1b\[(\d+)(?:;(\d+))?(?:;(\d+))?(?:;(\d+))?(?:;(\d+))?m/g;
+  let match;
+  let lastColor = null;
+
+  while ((match = ansiColorRegex.exec(line)) !== null) {
+    const code = match[1];
+    const code2 = match[2];
+    const code3 = match[3];
+    const code4 = match[4];
+    const code5 = match[5];
+
+    if (code === '0') {
+      lastColor = null;
+    } else if (code === '31' || code === '91') {
+      lastColor = '#ff0000';
+    } else if (code === '33' || code === '93') {
+      lastColor = '#ffaa00';
+    } else if (code === '32' || code === '92') {
+      lastColor = '#00ff00';
+    } else if (code === '34' || code === '94') {
+      lastColor = '#5555ff';
+    } else if (code === '35' || code === '95') {
+      lastColor = '#ff55ff';
+    } else if (code === '36' || code === '96') {
+      lastColor = '#55ffff';
+    } else if (code === '37' || code === '97') {
+      lastColor = '#ffffff';
+    } else if (code === '30' || code === '90') {
+      lastColor = '#000000';
+    } else if (code === '38' && code2 === '5' && code3) {
+      const color256 = parseInt(code3);
+      if (color256 >= 0 && color256 <= 15) {
+        const basicColors = [
+          '#000000', '#800000', '#008000', '#808000',
+          '#000080', '#800080', '#008080', '#c0c0c0',
+          '#808080', '#ff0000', '#00ff00', '#ffff00',
+          '#0000ff', '#ff00ff', '#00ffff', '#ffffff'
+        ];
+        lastColor = basicColors[color256] || null;
+      } else if (color256 >= 16 && color256 <= 231) {
+        const r = Math.floor((color256 - 16) / 36);
+        const g = Math.floor(((color256 - 16) % 36) / 6);
+        const b = (color256 - 16) % 6;
+        const rVal = r === 0 ? 0 : 55 + r * 40;
+        const gVal = g === 0 ? 0 : 55 + g * 40;
+        const bVal = b === 0 ? 0 : 55 + b * 40;
+        lastColor = `#${rVal.toString(16).padStart(2, '0')}${gVal.toString(16).padStart(2, '0')}${bVal.toString(16).padStart(2, '0')}`;
+      } else if (color256 >= 232 && color256 <= 255) {
+        const gray = 8 + (color256 - 232) * 10;
+        const grayHex = gray.toString(16).padStart(2, '0');
+        lastColor = `#${grayHex}${grayHex}${grayHex}`;
+      }
+    } else if (code === '38' && code2 === '2' && code3 && code4 && code5) {
+      const r = parseInt(code3);
+      const g = parseInt(code4);
+      const b = parseInt(code5);
+      lastColor = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+    }
+  }
+
+  return lastColor;
+}
+
 type PaneFocus = 'sidebar' | 'main';
 
 interface TUIProps {
@@ -260,9 +324,11 @@ function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane
         const itemBg = isSelected ? '#eeeeee' : undefined;
         const itemFg = isSelected ? '#000000' : '#d7d7d7';
         const dotText = isSelected ? '• ' : '  ';
-        const name = cmd.name.substring(0, width - 8);
-        const statusText = status === 'running' ? 'UP' : 'DOWN';
-        const statusColor = status === 'running' ? '#00ff00' : '#ff0000';
+        const statusText = status === 'running' ? 'UP' : status === 'error' ? 'ERROR' : 'DOWN';
+        const statusColor = status === 'running' ? '#00ff00' : status === 'error' ? '#ffaa00' : '#ff0000';
+        const statusWidth = statusText.length + 1;
+        const nameMaxWidth = width - 2 - statusWidth;
+        const name = cmd.name.substring(0, nameMaxWidth);
 
         return (
           <Box key={cmd.id} width={width} height={1}>
@@ -270,7 +336,7 @@ function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane
               {dotText}
             </Text>
             <Text backgroundColor={itemBg} color={itemFg} bold={isSelected}>
-              {name.padEnd(width - 8)}
+              {name.padEnd(nameMaxWidth)}
             </Text>
             <Text backgroundColor={itemBg} color={statusColor}>
               {' ' + statusText}
@@ -324,13 +390,14 @@ function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPa
       </Box>
       <Box flexDirection="column" width={width} height={logAreaHeight}>
         {logs.slice(0, logAreaHeight).map((log, i) => {
+          const ansiColor = detectAnsiColor(log.line);
           let line = stripAnsi(log.line);
           if (unifiedView && log.processId !== undefined) {
             const cmd = commands.find(c => c.id === log.processId);
             const prefix = `[${cmd ? cmd.name : log.processId}] `;
             line = prefix + line;
           }
-          const lineColor = log.source === 'stderr' ? '#ff0000' : '#ffffff';
+          const lineColor = ansiColor || (log.source === 'stderr' ? '#ff0000' : '#ffffff');
           const truncated = line.substring(0, width);
 
           return (
