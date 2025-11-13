@@ -1,0 +1,16 @@
+{
+  "commands": [
+    {
+      "name": "Dev Server",
+      "command": "npm run dev"
+    },
+    {
+      "name": "Build Process",
+      "command": "npm run build"
+    },
+    {
+      "name": "Worker",
+      "command": "npm run worker"
+    }
+  ]
+}

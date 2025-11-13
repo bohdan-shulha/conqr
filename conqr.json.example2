@@ -1,0 +1,7 @@
+{
+  "commands": {
+    "Dev Server": "npm run dev",
+    "Build Process": "npm run build",
+    "Worker": "npm run worker"
+  }
+}
