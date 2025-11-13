@@ -4,7 +4,7 @@ import { parseCommands } from './cli.js';
 import { loadConfig } from './config.js';
 import { ProcessManager } from './process-manager.js';
 import { LogBuffer } from './log-buffer.js';
-import { renderTUI } from './ui.jsx';
+import { renderTUI } from './ui.js';
 
 const cliCommands = parseCommands();
 const configCommands = loadConfig();
