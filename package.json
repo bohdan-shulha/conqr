@@ -7,8 +7,13 @@
   "bin": {
     "conqr": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "tsx src/index.ts",
     "dev": "tsx src/index.ts"
   },
@@ -16,10 +21,20 @@
     "tui",
     "process",
     "runner",
-    "terminal"
+    "terminal",
+    "concurrent",
+    "monitor"
   ],
   "author": "",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bohdan-shulha/conqr.git"
+  },
+  "homepage": "https://github.com/bohdan-shulha/conqr#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "ink": "^4.4.1",
     "react": "^18.2.0"
