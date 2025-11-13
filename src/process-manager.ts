@@ -81,9 +81,7 @@ export class ProcessManager extends EventEmitter {
         if (line.length > 0) {
           this.logBuffer.addLog(id, line, 'stdout');
           this.emit('log', { processId: id, line, source: 'stdout' } as LogEvent);
-          if (this.detectError(line)) {
-            this.updateStatusToError(id);
-          }
+          this.checkRecentErrors(id);
         }
       });
     });
@@ -98,9 +96,7 @@ export class ProcessManager extends EventEmitter {
         if (line.length > 0) {
           this.logBuffer.addLog(id, line, 'stderr');
           this.emit('log', { processId: id, line, source: 'stderr' } as LogEvent);
-          if (this.detectError(line)) {
-            this.updateStatusToError(id);
-          }
+          this.checkRecentErrors(id);
         }
       });
     });
@@ -149,6 +145,26 @@ export class ProcessManager extends EventEmitter {
     if (procInfo && procInfo.status === 'running') {
       procInfo.status = 'error';
       this.emit('status-change', { processId, status: 'error' } as StatusChangeEvent);
+    }
+  }
+
+  private checkRecentErrors(processId: number): void {
+    const procInfo = this.processes.get(processId);
+    if (!procInfo || procInfo.status === 'stopped' || procInfo.status === 'unknown') {
+      return;
+    }
+
+    const logs = this.logBuffer.getLogs(processId);
+    const recentLogs = logs.slice(-10);
+
+    const hasRecentError = recentLogs.some(log => this.detectError(log.line));
+
+    if (hasRecentError && procInfo.status === 'running') {
+      procInfo.status = 'error';
+      this.emit('status-change', { processId, status: 'error' } as StatusChangeEvent);
+    } else if (!hasRecentError && procInfo.status === 'error' && !procInfo.process.killed) {
+      procInfo.status = 'running';
+      this.emit('status-change', { processId, status: 'running' } as StatusChangeEvent);
     }
   }
 
