@@ -166,6 +166,13 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
       setLogScrollOffset(Infinity);
     }
 
+    if (logScrollOffset !== Infinity && logs.length > displayHeight) {
+      const maxScroll = Math.max(0, logs.length - displayHeight);
+      if (logScrollOffset >= maxScroll) {
+        setLogScrollOffset(Infinity);
+      }
+    }
+
     prevLogsLengthRef.current = logs.length;
   }, [logs.length, logScrollOffset, displayHeight]);
 
@@ -210,7 +217,8 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
           }
           const currentLogs = unifiedView ? logBuffer.getUnifiedLogs() : logBuffer.getLogs(commands[selectedIndex].id);
           const maxScroll = Math.max(0, currentLogs.length - displayHeight);
-          return Math.min(prev + 1, maxScroll);
+          const newScroll = Math.min(prev + 1, maxScroll);
+          return newScroll >= maxScroll ? Infinity : newScroll;
         });
       }
     } else if (key.pageUp && focusedPane === 'main') {
@@ -228,7 +236,8 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
         }
         const currentLogs = unifiedView ? logBuffer.getUnifiedLogs() : logBuffer.getLogs(commands[selectedIndex].id);
         const maxScroll = Math.max(0, currentLogs.length - displayHeight);
-        return Math.min(prev + 10, maxScroll);
+        const newScroll = Math.min(prev + 10, maxScroll);
+        return newScroll >= maxScroll ? Infinity : newScroll;
       });
     } else if (key.home && focusedPane === 'main') {
       setLogScrollOffset(0);
@@ -318,7 +327,7 @@ function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane
   const allProcessesName = 'All processes'.substring(0, width - 8);
   const allProcessesNamePadded = allProcessesName.padEnd(width - 8);
 
-  const maxCommandsToShow = availableHeight - renderIndex;
+  const maxCommandsToShow = availableHeight - 1;
   let startCmdIndex = 0;
 
   if (selectedIndex !== ALL_PROCESSES_INDEX && selectedIndex >= maxCommandsToShow) {
@@ -346,7 +355,7 @@ function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane
           {allProcessesNamePadded}
         </Text>
         <Text backgroundColor={allProcessesBg} color="#d7d7d7">
-          {' '}
+          {'   '}
         </Text>
         <Text backgroundColor={allProcessesBg} color="#d7d7d7">---</Text>
       </Box>
