@@ -85,6 +85,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
   const [logScrollOffset, setLogScrollOffset] = useState(0);
   const [statuses, setStatuses] = useState<Map<number, string>>(new Map());
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [rawMode, setRawMode] = useState(false);
   const { exit } = useApp();
 
   const sidebarWidth = 30;
@@ -177,6 +178,9 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
   }, [logs.length, logScrollOffset, displayHeight]);
 
   useInput((input: string, key: any) => {
+    if (rawMode) {
+      return;
+    }
     if (key.leftArrow && focusedPane === 'main') {
       setFocusedPane('sidebar');
     } else if (key.rightArrow && focusedPane === 'sidebar') {
@@ -243,6 +247,8 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
       setLogScrollOffset(0);
     } else if (key.end && focusedPane === 'main') {
       setLogScrollOffset(Infinity);
+    } else if (input === 'r' || input === 'R') {
+      setRawMode(prev => !prev);
     } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
       processManager.killAll().then(() => {
         exit();
@@ -265,9 +271,27 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
   const terminalHeight = process.stdout.rows || 24;
   const contentHeight = terminalHeight - 1;
 
+  if (rawMode) {
+    return (
+      <RawLogsView
+        logs={logs}
+        unifiedView={unifiedView}
+        commands={commands}
+        terminalWidth={terminalWidth}
+        terminalHeight={terminalHeight}
+        logScrollOffset={logScrollOffset}
+        displayHeight={displayHeight}
+        onScrollChange={setLogScrollOffset}
+        onToggleRawMode={() => setRawMode(false)}
+        processManager={processManager}
+        exit={exit}
+      />
+    );
+  }
+
   const helpText = focusedPane === 'sidebar'
-    ? '←→: switch | q: quit'
-    : '←→: switch | ↑↓: scroll | PageUp/Down: 10 lines | Home/End: top/bottom | q: quit';
+    ? '←→: switch | r: raw mode | q: quit'
+    : '←→: switch | ↑↓: scroll | PageUp/Down: 10 lines | Home/End: top/bottom | r: raw mode | q: quit';
 
   return (
     <Box flexDirection="column" width={terminalWidth} height={terminalHeight}>
@@ -456,6 +480,94 @@ function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPa
           </Text>
         </Box>
       )}
+    </Box>
+  );
+}
+
+interface RawLogsViewProps {
+  logs: LogEntry[];
+  unifiedView: boolean;
+  commands: CommandInfo[];
+  terminalWidth: number;
+  terminalHeight: number;
+  logScrollOffset: number;
+  displayHeight: number;
+  onScrollChange: (offset: number) => void;
+  onToggleRawMode: () => void;
+  processManager: ProcessManager;
+  exit: () => void;
+}
+
+function RawLogsView({ logs, unifiedView, commands, terminalWidth, terminalHeight, displayHeight, logScrollOffset, onScrollChange, onToggleRawMode, processManager, exit }: RawLogsViewProps) {
+  useInput((input, key) => {
+    if (key.upArrow) {
+      if (logScrollOffset === Infinity) {
+        const maxScroll = Math.max(0, logs.length - displayHeight - 1);
+        onScrollChange(maxScroll);
+      } else {
+        onScrollChange(Math.max(0, logScrollOffset - 1));
+      }
+    } else if (key.downArrow) {
+      if (logScrollOffset === Infinity) {
+        onScrollChange(Infinity);
+      } else {
+        const maxScroll = Math.max(0, logs.length - displayHeight);
+        const newScroll = Math.min(logScrollOffset + 1, maxScroll);
+        onScrollChange(newScroll >= maxScroll ? Infinity : newScroll);
+      }
+    } else if (key.pageUp) {
+      if (logScrollOffset === Infinity) {
+        onScrollChange(Math.max(0, logs.length - displayHeight - 10));
+      } else {
+        onScrollChange(Math.max(0, logScrollOffset - 10));
+      }
+    } else if (key.pageDown) {
+      if (logScrollOffset === Infinity) {
+        onScrollChange(Infinity);
+      } else {
+        const maxScroll = Math.max(0, logs.length - displayHeight);
+        const newScroll = Math.min(logScrollOffset + 10, maxScroll);
+        onScrollChange(newScroll >= maxScroll ? Infinity : newScroll);
+      }
+    } else if (key.home) {
+      onScrollChange(0);
+    } else if (key.end) {
+      onScrollChange(Infinity);
+    } else if (input === 'r' || input === 'R') {
+      onToggleRawMode();
+    } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
+      processManager.killAll().then(() => {
+        exit();
+      });
+    }
+  });
+
+  const wasAtBottom = logScrollOffset === Infinity ||
+    (logScrollOffset >= logs.length - displayHeight && logs.length > displayHeight);
+
+  const startIndex = wasAtBottom
+    ? Math.max(0, logs.length - displayHeight)
+    : Math.min(logScrollOffset, Math.max(0, logs.length - displayHeight));
+
+  const displayLogs = logs.slice(startIndex, startIndex + displayHeight);
+
+  return (
+    <Box flexDirection="column" width={terminalWidth} height={terminalHeight}>
+      {displayLogs.map((log, i) => {
+        let line = stripAnsi(log.line);
+        if (unifiedView && log.processId !== undefined) {
+          const cmd = commands.find(c => c.id === log.processId);
+          const prefix = `[${cmd ? cmd.name : log.processId}] `;
+          line = prefix + line;
+        }
+        const truncated = line.substring(0, terminalWidth);
+
+        return (
+          <Text key={i}>
+            {truncated}
+          </Text>
+        );
+      })}
     </Box>
   );
 }
