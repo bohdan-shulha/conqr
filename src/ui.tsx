@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { render, Box, Text, useInput, useApp } from 'ink';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { render, Box, Text, useInput, useApp, useStdin } from 'ink';
 import stripAnsi from 'strip-ansi';
 import { CommandInfo } from './cli.js';
 import { ProcessManager } from './process-manager.js';
@@ -79,6 +79,63 @@ interface TUIProps {
 
 const ALL_PROCESSES_INDEX = -1;
 
+function useMouseWheel(
+  onScroll: (delta: number) => void,
+  enabled: boolean = true
+) {
+  const { stdin, setRawMode, isRawModeSupported } = useStdin();
+  const mouseBufferRef = useRef<string>('');
+
+  useEffect(() => {
+    if (!enabled || !isRawModeSupported || !stdin) {
+      return;
+    }
+
+    process.stdout.write('\x1b[?1000h');
+    process.stdout.write('\x1b[?1006h');
+
+    const handleData = (data: Buffer) => {
+      const str = data.toString();
+      mouseBufferRef.current += str;
+
+      const wheelUpRegex = /\x1b\[<64;(\d+);(\d+)M/g;
+      const wheelDownRegex = /\x1b\[<65;(\d+);(\d+)M/g;
+      const wheelUpRegexAlt = /\x1b\[64;(\d+);(\d+)M/g;
+      const wheelDownRegexAlt = /\x1b\[65;(\d+);(\d+)M/g;
+
+      let match: RegExpExecArray | null = null;
+      let found = false;
+
+      match = wheelUpRegex.exec(mouseBufferRef.current) || wheelUpRegexAlt.exec(mouseBufferRef.current);
+      if (match) {
+        onScroll(-3);
+        found = true;
+      } else {
+        match = wheelDownRegex.exec(mouseBufferRef.current) || wheelDownRegexAlt.exec(mouseBufferRef.current);
+        if (match) {
+          onScroll(3);
+          found = true;
+        }
+      }
+
+      if (found && match) {
+        const matchEnd = match.index + match[0].length;
+        mouseBufferRef.current = mouseBufferRef.current.slice(matchEnd);
+      } else if (mouseBufferRef.current.length > 100) {
+        mouseBufferRef.current = mouseBufferRef.current.slice(-50);
+      }
+    };
+
+    stdin.on('data', handleData);
+
+    return () => {
+      stdin.removeListener('data', handleData);
+      process.stdout.write('\x1b[?1006l');
+      process.stdout.write('\x1b[?1000l');
+    };
+  }, [enabled, stdin, isRawModeSupported, onScroll]);
+}
+
 export function TUI({ commands, processManager, logBuffer }: TUIProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sidebar');
@@ -157,7 +214,10 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
   }, [selectedIndex]);
 
   const prevLogsLengthRef = useRef<number>(0);
-  const displayHeight = (process.stdout.rows || 24) - 1;
+  const terminalHeight = process.stdout.rows || 24;
+  const displayHeight = terminalHeight - 1;
+
+  const unifiedView = selectedIndex === ALL_PROCESSES_INDEX;
 
   useEffect(() => {
     const wasAtBottom = logScrollOffset === Infinity ||
@@ -179,8 +239,16 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
 
   useInput((input: string, key: any) => {
     if (rawMode) {
+      if (input === 'r' || input === 'R') {
+        setRawMode(false);
+      } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
+        processManager.killAll().then(() => {
+          exit();
+        });
+      }
       return;
     }
+
     if (key.leftArrow && focusedPane === 'main') {
       setFocusedPane('sidebar');
     } else if (key.rightArrow && focusedPane === 'sidebar') {
@@ -195,14 +263,6 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
           setSelectedIndex(selectedIndex - 1);
         }
         setLogScrollOffset(Infinity);
-      } else {
-        setLogScrollOffset((prev: number) => {
-          if (prev === Infinity) {
-            const currentLogs = unifiedView ? logBuffer.getUnifiedLogs() : logBuffer.getLogs(commands[selectedIndex].id);
-            return Math.max(0, currentLogs.length - displayHeight - 1);
-          }
-          return Math.max(0, prev - 1);
-        });
       }
     } else if (key.downArrow) {
       if (focusedPane === 'sidebar') {
@@ -214,39 +274,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
           setSelectedIndex(selectedIndex + 1);
         }
         setLogScrollOffset(Infinity);
-      } else {
-        setLogScrollOffset((prev: number) => {
-          if (prev === Infinity) {
-            return Infinity;
-          }
-          const currentLogs = unifiedView ? logBuffer.getUnifiedLogs() : logBuffer.getLogs(commands[selectedIndex].id);
-          const maxScroll = Math.max(0, currentLogs.length - displayHeight);
-          const newScroll = Math.min(prev + 1, maxScroll);
-          return newScroll >= maxScroll ? Infinity : newScroll;
-        });
       }
-    } else if (key.pageUp && focusedPane === 'main') {
-      setLogScrollOffset((prev: number) => {
-        if (prev === Infinity) {
-          const currentLogs = unifiedView ? logBuffer.getUnifiedLogs() : logBuffer.getLogs(commands[selectedIndex].id);
-          return Math.max(0, currentLogs.length - displayHeight - 10);
-        }
-        return Math.max(0, prev - 10);
-      });
-    } else if (key.pageDown && focusedPane === 'main') {
-      setLogScrollOffset((prev: number) => {
-        if (prev === Infinity) {
-          return Infinity;
-        }
-        const currentLogs = unifiedView ? logBuffer.getUnifiedLogs() : logBuffer.getLogs(commands[selectedIndex].id);
-        const maxScroll = Math.max(0, currentLogs.length - displayHeight);
-        const newScroll = Math.min(prev + 10, maxScroll);
-        return newScroll >= maxScroll ? Infinity : newScroll;
-      });
-    } else if (key.home && focusedPane === 'main') {
-      setLogScrollOffset(0);
-    } else if (key.end && focusedPane === 'main') {
-      setLogScrollOffset(Infinity);
     } else if (input === 'r' || input === 'R') {
       setRawMode(prev => !prev);
     } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
@@ -256,73 +284,81 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
     }
   });
 
-  const unifiedView = selectedIndex === ALL_PROCESSES_INDEX;
-
+  const effectiveDisplayHeight = rawMode ? terminalHeight : displayHeight;
   const wasAtBottom = logScrollOffset === Infinity ||
-    (logScrollOffset >= logs.length - displayHeight && logs.length > displayHeight);
+    (logScrollOffset >= logs.length - effectiveDisplayHeight && logs.length > effectiveDisplayHeight);
 
   const startIndex = wasAtBottom
-    ? Math.max(0, logs.length - displayHeight)
-    : Math.min(logScrollOffset, Math.max(0, logs.length - displayHeight));
+    ? Math.max(0, logs.length - effectiveDisplayHeight)
+    : Math.min(logScrollOffset, Math.max(0, logs.length - effectiveDisplayHeight));
 
-  const displayLogs = logs.slice(startIndex, startIndex + displayHeight);
+  const displayLogs = logs.slice(startIndex, startIndex + effectiveDisplayHeight);
 
   const terminalWidth = process.stdout.columns || 80;
-  const terminalHeight = process.stdout.rows || 24;
-  const contentHeight = terminalHeight - 1;
+  const contentHeight = rawMode ? terminalHeight : terminalHeight - 1;
 
-  if (rawMode) {
-    return (
-      <RawLogsView
-        logs={logs}
-        unifiedView={unifiedView}
-        commands={commands}
-        terminalWidth={terminalWidth}
-        terminalHeight={terminalHeight}
-        logScrollOffset={logScrollOffset}
-        displayHeight={displayHeight}
-        onScrollChange={setLogScrollOffset}
-        onToggleRawMode={() => setRawMode(false)}
-        processManager={processManager}
-        exit={exit}
-      />
-    );
-  }
-
-  const helpText = focusedPane === 'sidebar'
+  const helpText = rawMode
+    ? ''
+    : focusedPane === 'sidebar'
     ? '←→: switch | r: raw mode | q: quit'
     : '←→: switch | ↑↓: scroll | PageUp/Down: 10 lines | Home/End: top/bottom | r: raw mode | q: quit';
 
   return (
     <Box flexDirection="column" width={terminalWidth} height={terminalHeight}>
-      <Box flexDirection="row" width={terminalWidth} height={contentHeight}>
-        <Sidebar
-          width={sidebarWidth}
-          height={contentHeight}
+      {!rawMode && (
+        <Box flexDirection="row" width={terminalWidth} height={contentHeight}>
+          <Sidebar
+            width={sidebarWidth}
+            height={contentHeight}
+            commands={commands}
+            selectedIndex={selectedIndex}
+            statuses={statuses}
+            focusedPane={focusedPane}
+          />
+          <Separator height={contentHeight} />
+          <MainPane
+            width={terminalWidth - sidebarWidth - 1}
+            height={contentHeight}
+            unifiedView={unifiedView}
+            selectedCommand={unifiedView ? null : commands[selectedIndex]}
+            logs={displayLogs}
+            focusedPane={focusedPane}
+            commands={commands}
+            logScrollOffset={logScrollOffset}
+            totalLogs={logs.length}
+            displayHeight={displayHeight}
+            onScrollChange={setLogScrollOffset}
+            enableInput={true}
+            enableKeyboardInput={focusedPane === 'main'}
+          />
+        </Box>
+      )}
+      {rawMode && (
+        <MainPane
+          width={terminalWidth}
+          height={terminalHeight}
+          unifiedView={unifiedView}
+          selectedCommand={null}
+          logs={displayLogs}
+          focusedPane="main"
           commands={commands}
-          selectedIndex={selectedIndex}
-          statuses={statuses}
-          focusedPane={focusedPane}
+          logScrollOffset={logScrollOffset}
+          totalLogs={logs.length}
+          displayHeight={terminalHeight}
+          onScrollChange={setLogScrollOffset}
+          enableInput={true}
+          enableKeyboardInput={true}
+          showHeader={false}
+          useColors={false}
         />
-        <Separator height={contentHeight} />
-      <MainPane
-        width={terminalWidth - sidebarWidth - 1}
-        height={contentHeight}
-        unifiedView={unifiedView}
-        selectedCommand={unifiedView ? null : commands[selectedIndex]}
-        logs={displayLogs}
-        focusedPane={focusedPane}
-        commands={commands}
-        logScrollOffset={logScrollOffset}
-        totalLogs={logs.length}
-        displayHeight={displayHeight}
-      />
-      </Box>
-      <Box width={terminalWidth} height={1}>
-        <Text backgroundColor="#585858" color="#ffffff">
-          {helpText.padEnd(terminalWidth)}
-        </Text>
-      </Box>
+      )}
+      {!rawMode && (
+        <Box width={terminalWidth} height={1}>
+          <Text backgroundColor="#585858" color="#ffffff">
+            {helpText.padEnd(terminalWidth)}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -424,6 +460,52 @@ function Separator({ height }: { height: number }) {
   );
 }
 
+interface MoreLogsBelowProps {
+  width: number;
+}
+
+function MoreLogsBelow({ width }: MoreLogsBelowProps) {
+  return (
+    <Box width={width} height={1}>
+      <Text backgroundColor="#ffaa00" color="#000000" bold>
+        {' ▼ More logs below - Press END to jump to bottom '.padEnd(width)}
+      </Text>
+    </Box>
+  );
+}
+
+interface LogsListProps {
+  logs: LogEntry[];
+  width: number;
+  unifiedView: boolean;
+  commands: CommandInfo[];
+  useColors?: boolean;
+}
+
+function LogsList({ logs, width, unifiedView, commands, useColors = true }: LogsListProps) {
+  return (
+    <>
+      {logs.map((log, i) => {
+        const ansiColor = useColors ? detectAnsiColor(log.line) : null;
+        let line = stripAnsi(log.line);
+        if (unifiedView && log.processId !== undefined) {
+          const cmd = commands.find(c => c.id === log.processId);
+          const prefix = `[${cmd ? cmd.name : log.processId}] `;
+          line = prefix + line;
+        }
+        const lineColor = useColors ? (ansiColor || (log.source === 'stderr' ? '#ff0000' : '#ffffff')) : undefined;
+        const truncated = line.substring(0, width);
+
+        return (
+          <Text key={i} color={lineColor}>
+            {useColors ? truncated.padEnd(width) : truncated}
+          </Text>
+        );
+      })}
+    </>
+  );
+}
+
 interface MainPaneProps {
   width: number;
   height: number;
@@ -435,9 +517,14 @@ interface MainPaneProps {
   logScrollOffset: number;
   totalLogs: number;
   displayHeight: number;
+  showHeader?: boolean;
+  useColors?: boolean;
+  onScrollChange: (offset: number) => void;
+  enableInput?: boolean;
+  enableKeyboardInput?: boolean;
 }
 
-function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPane, commands, logScrollOffset, totalLogs, displayHeight }: MainPaneProps) {
+function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPane, commands, logScrollOffset, totalLogs, displayHeight, showHeader = true, useColors = true, onScrollChange, enableInput = true, enableKeyboardInput = true }: MainPaneProps) {
   const title = unifiedView ? ' All Logs ' : ` ${selectedCommand?.name || ''} - ${selectedCommand?.command || ''} `;
   const headerBg = focusedPane === 'main' ? '#0055ff' : '#585858';
   const headerFg = '#ffffff';
@@ -445,65 +532,42 @@ function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPa
 
   const isScrolledUp = logScrollOffset !== Infinity;
   const hasMoreBelow = isScrolledUp && totalLogs > displayHeight && logScrollOffset < totalLogs - displayHeight;
-  const logAreaHeight = height - 1 - (hasMoreBelow ? 1 : 0);
+  const headerHeight = showHeader ? 1 : 0;
+  const logAreaHeight = height - headerHeight - (hasMoreBelow ? 1 : 0);
 
-  return (
-    <Box flexDirection="column" width={width} height={height}>
-      <Box width={width} height={1}>
-        <Text backgroundColor={headerBg} color={headerFg} bold={focusedPane === 'main'}>
-          {headerText.padEnd(width)}
-        </Text>
-      </Box>
-      <Box flexDirection="column" width={width} height={logAreaHeight}>
-        {logs.slice(0, logAreaHeight).map((log, i) => {
-          const ansiColor = detectAnsiColor(log.line);
-          let line = stripAnsi(log.line);
-          if (unifiedView && log.processId !== undefined) {
-            const cmd = commands.find(c => c.id === log.processId);
-            const prefix = `[${cmd ? cmd.name : log.processId}] `;
-            line = prefix + line;
-          }
-          const lineColor = ansiColor || (log.source === 'stderr' ? '#ff0000' : '#ffffff');
-          const truncated = line.substring(0, width);
+  const handleMouseWheel = useCallback((delta: number) => {
+    if (!enableInput) {
+      return;
+    }
 
-          return (
-            <Text key={i} color={lineColor}>
-              {truncated.padEnd(width)}
-            </Text>
-          );
-        })}
-      </Box>
-      {hasMoreBelow && (
-        <Box width={width} height={1}>
-          <Text backgroundColor="#ffaa00" color="#000000" bold>
-            {' ▼ More logs below - Press END to jump to bottom '.padEnd(width)}
-          </Text>
-        </Box>
-      )}
-    </Box>
-  );
-}
+    if (delta > 0) {
+      if (logScrollOffset === Infinity) {
+        const maxScroll = Math.max(0, totalLogs - displayHeight);
+        onScrollChange(Math.max(0, maxScroll - delta));
+      } else {
+        onScrollChange(Math.max(0, logScrollOffset - delta));
+      }
+    } else {
+      if (logScrollOffset === Infinity) {
+        onScrollChange(Infinity);
+      } else {
+        const maxScroll = Math.max(0, totalLogs - displayHeight);
+        const newScroll = Math.min(logScrollOffset - delta, maxScroll);
+        onScrollChange(newScroll >= maxScroll ? Infinity : newScroll);
+      }
+    }
+  }, [enableInput, logScrollOffset, totalLogs, displayHeight, onScrollChange]);
 
-interface RawLogsViewProps {
-  logs: LogEntry[];
-  unifiedView: boolean;
-  commands: CommandInfo[];
-  terminalWidth: number;
-  terminalHeight: number;
-  logScrollOffset: number;
-  displayHeight: number;
-  onScrollChange: (offset: number) => void;
-  onToggleRawMode: () => void;
-  processManager: ProcessManager;
-  exit: () => void;
-}
+  useMouseWheel(handleMouseWheel, enableInput);
 
-function RawLogsView({ logs, unifiedView, commands, terminalWidth, terminalHeight, displayHeight, logScrollOffset, onScrollChange, onToggleRawMode, processManager, exit }: RawLogsViewProps) {
   useInput((input, key) => {
+    if (!enableKeyboardInput) {
+      return;
+    }
+
     if (key.upArrow) {
       if (logScrollOffset === Infinity) {
-        const maxScroll = Math.max(0, logs.length - displayHeight - 1);
-        onScrollChange(maxScroll);
+        onScrollChange(Math.max(0, totalLogs - displayHeight - 1));
       } else {
         onScrollChange(Math.max(0, logScrollOffset - 1));
       }
@@ -511,13 +575,13 @@ function RawLogsView({ logs, unifiedView, commands, terminalWidth, terminalHeigh
       if (logScrollOffset === Infinity) {
         onScrollChange(Infinity);
       } else {
-        const maxScroll = Math.max(0, logs.length - displayHeight);
+        const maxScroll = Math.max(0, totalLogs - displayHeight);
         const newScroll = Math.min(logScrollOffset + 1, maxScroll);
         onScrollChange(newScroll >= maxScroll ? Infinity : newScroll);
       }
     } else if (key.pageUp) {
       if (logScrollOffset === Infinity) {
-        onScrollChange(Math.max(0, logs.length - displayHeight - 10));
+        onScrollChange(Math.max(0, totalLogs - displayHeight - 10));
       } else {
         onScrollChange(Math.max(0, logScrollOffset - 10));
       }
@@ -525,49 +589,36 @@ function RawLogsView({ logs, unifiedView, commands, terminalWidth, terminalHeigh
       if (logScrollOffset === Infinity) {
         onScrollChange(Infinity);
       } else {
-        const maxScroll = Math.max(0, logs.length - displayHeight);
+        const maxScroll = Math.max(0, totalLogs - displayHeight);
         const newScroll = Math.min(logScrollOffset + 10, maxScroll);
         onScrollChange(newScroll >= maxScroll ? Infinity : newScroll);
       }
-    } else if (key.home) {
+    } else if (input === '\x1b[H' || input === '\x1bOH') {
       onScrollChange(0);
-    } else if (key.end) {
+    } else if (input === '\x1b[F' || input === '\x1bOF') {
       onScrollChange(Infinity);
-    } else if (input === 'r' || input === 'R') {
-      onToggleRawMode();
-    } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
-      processManager.killAll().then(() => {
-        exit();
-      });
     }
   });
 
-  const wasAtBottom = logScrollOffset === Infinity ||
-    (logScrollOffset >= logs.length - displayHeight && logs.length > displayHeight);
-
-  const startIndex = wasAtBottom
-    ? Math.max(0, logs.length - displayHeight)
-    : Math.min(logScrollOffset, Math.max(0, logs.length - displayHeight));
-
-  const displayLogs = logs.slice(startIndex, startIndex + displayHeight);
-
   return (
-    <Box flexDirection="column" width={terminalWidth} height={terminalHeight}>
-      {displayLogs.map((log, i) => {
-        let line = stripAnsi(log.line);
-        if (unifiedView && log.processId !== undefined) {
-          const cmd = commands.find(c => c.id === log.processId);
-          const prefix = `[${cmd ? cmd.name : log.processId}] `;
-          line = prefix + line;
-        }
-        const truncated = line.substring(0, terminalWidth);
-
-        return (
-          <Text key={i}>
-            {truncated}
+    <Box flexDirection="column" width={width} height={height}>
+      {showHeader && (
+        <Box width={width} height={1}>
+          <Text backgroundColor={headerBg} color={headerFg} bold={focusedPane === 'main'}>
+            {headerText.padEnd(width)}
           </Text>
-        );
-      })}
+        </Box>
+      )}
+      <Box flexDirection="column" width={width} height={logAreaHeight}>
+        <LogsList
+          logs={logs.slice(0, logAreaHeight)}
+          width={width}
+          unifiedView={unifiedView}
+          commands={commands}
+          useColors={useColors}
+        />
+      </Box>
+      {hasMoreBelow && <MoreLogsBelow width={width} />}
     </Box>
   );
 }
