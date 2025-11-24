@@ -93,16 +93,38 @@ npm start 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
 
 - Run multiple commands concurrently
 - Two-pane interface:
-  - **Sidebar**: "All processes" menu item and list of commands with status indicators (▲ = running, ▼ = stopped/error)
+  - **Sidebar**: "All processes" menu item and list of commands with status indicators (UP = running, ERROR = error detected, DOWN = stopped)
   - **Main pane**: Logs from selected command or unified view when "All processes" is selected
+- ANSI color support in logs
+- Automatic error detection based on log patterns and ANSI color codes
+- Auto-scroll to bottom when new logs arrive (can be disabled by scrolling up)
+- Mouse wheel scrolling support
+- Raw mode for full-screen log viewing (press `r` to toggle)
 - Keyboard controls:
-  - **Arrow Up/Down**: Navigate between commands (including "All processes" menu item)
-  - **q**: Quit application
+  - **Arrow Left/Right**: Switch focus between sidebar and main pane
+  - **Arrow Up/Down**:
+    - In sidebar: Navigate between commands (including "All processes" menu item)
+    - In main pane: Scroll logs line by line
+  - **PageUp/PageDown**: Scroll logs 10 lines at a time (main pane)
+  - **Home**: Jump to top of logs (main pane)
+  - **End**: Jump to bottom of logs (main pane)
+  - **r**: Toggle raw mode (full-screen log view)
+  - **q** or **Ctrl+C**: Quit application
+
+## Requirements
+
+- Node.js >= 18.0.0
 
 ## Installation
 
+Install globally:
 ```bash
-npm install
+npm install -g conqr
+```
+
+Or install locally in your project:
+```bash
+npm install conqr
 ```
 
 ## Build
@@ -111,15 +133,16 @@ npm install
 npm run build
 ```
 
-## Run
+## Development
 
-Development (using tsx):
+Run in development mode (using tsx):
 ```bash
 npm start 'command1' 'command2' 'command3'
 ```
 
 Or after building:
 ```bash
+npm run build
 node dist/index.js 'command1' 'command2' 'command3'
 ```
 
