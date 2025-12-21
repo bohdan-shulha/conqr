@@ -348,7 +348,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
           totalLogs={logs.length}
           displayHeight={terminalHeight}
           onScrollChange={setLogScrollOffset}
-          enableInput={true}
+          enableInput={false}
           enableKeyboardInput={true}
           showHeader={false}
           useColors={false}
