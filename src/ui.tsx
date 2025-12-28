@@ -242,8 +242,11 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
       if (input === 'r' || input === 'R') {
         setRawMode(false);
       } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
-        exit();
-        processManager.killAll().finally(() => {
+        processManager.killAll().then(() => {
+          exit();
+          process.exit(0);
+        }).catch(() => {
+          exit();
           process.exit(0);
         });
       }
@@ -279,8 +282,11 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
     } else if (input === 'r' || input === 'R') {
       setRawMode(prev => !prev);
     } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
-      exit();
-      processManager.killAll().finally(() => {
+      processManager.killAll().then(() => {
+        exit();
+        process.exit(0);
+      }).catch(() => {
+        exit();
         process.exit(0);
       });
     }

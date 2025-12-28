@@ -174,7 +174,20 @@ export class ProcessManager extends EventEmitter {
     }
 
     try {
-      procInfo.process.kill(signal);
+      const pid = procInfo.process.pid;
+      if (!pid) {
+        return;
+      }
+
+      if (process.platform !== 'win32') {
+        try {
+          process.kill(-pid, signal);
+        } catch {
+          procInfo.process.kill(signal);
+        }
+      } else {
+        procInfo.process.kill(signal);
+      }
     } catch {
     }
   }
