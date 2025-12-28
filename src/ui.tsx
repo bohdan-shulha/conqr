@@ -79,6 +79,12 @@ interface TUIProps {
 
 const ALL_PROCESSES_INDEX = -1;
 
+function resetTerminalMouseMode() {
+  process.stdout.write('\x1b[?1006l');
+  process.stdout.write('\x1b[?1000l');
+  process.stdout.write('\x1b[?25h');
+}
+
 function useMouseWheel(
   onScroll: (delta: number) => void,
   enabled: boolean = true
@@ -130,8 +136,7 @@ function useMouseWheel(
 
     return () => {
       stdin.removeListener('data', handleData);
-      process.stdout.write('\x1b[?1006l');
-      process.stdout.write('\x1b[?1000l');
+      resetTerminalMouseMode();
     };
   }, [enabled, stdin, isRawModeSupported, onScroll]);
 }
@@ -149,6 +154,12 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
 
   const prevLogsRef = useRef<LogEntry[]>([]);
   const prevStatusesRef = useRef<Map<number, string>>(new Map());
+
+  useEffect(() => {
+    return () => {
+      resetTerminalMouseMode();
+    };
+  }, []);
 
   useEffect(() => {
     const updateStatuses = () => {
@@ -242,6 +253,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
       if (input === 'r' || input === 'R') {
         setRawMode(false);
       } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
+        resetTerminalMouseMode();
         processManager.killAll().then(() => {
           exit();
           process.exit(0);
@@ -282,6 +294,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
     } else if (input === 'r' || input === 'R') {
       setRawMode(prev => !prev);
     } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
+      resetTerminalMouseMode();
       processManager.killAll().then(() => {
         exit();
         process.exit(0);
@@ -635,15 +648,18 @@ export function renderTUI(commands: CommandInfo[], processManager: ProcessManage
   processManager.startAll(commands);
 
   const cleanup = async () => {
+    resetTerminalMouseMode();
     await processManager.killAll();
   };
 
   process.on('SIGINT', () => {
+    resetTerminalMouseMode();
     cleanup().then(() => {
       process.exit(0);
     });
   });
   process.on('SIGTERM', () => {
+    resetTerminalMouseMode();
     cleanup().then(() => {
       process.exit(0);
     });
