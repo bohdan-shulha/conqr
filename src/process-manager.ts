@@ -104,17 +104,21 @@ export class ProcessManager extends EventEmitter {
 
     proc.on('error', (err: Error) => {
       this.logBuffer.addLog(id, `Process error: ${err.message}`, 'stderr');
-      this.processes.set(id, { ...commandInfo, status: 'error', process: proc, pid: proc.pid });
-      this.emit('status-change', { processId: id, status: 'error' } as StatusChangeEvent);
+      const current = this.processes.get(id);
+      if (current && current.process === proc) {
+        current.status = 'error';
+        current.pid = proc.pid;
+        this.emit('status-change', { processId: id, status: 'error' } as StatusChangeEvent);
+      }
     });
 
     proc.on('exit', (code: number | null) => {
       const procInfo = this.processes.get(id);
-      if (procInfo) {
+      if (procInfo && procInfo.process === proc) {
         procInfo.status = code === 0 ? 'stopped' : 'error';
         procInfo.pid = proc.pid;
+        this.emit('status-change', { processId: id, status: code === 0 ? 'stopped' : 'error' } as StatusChangeEvent);
       }
-      this.emit('status-change', { processId: id, status: code === 0 ? 'stopped' : 'error' } as StatusChangeEvent);
     });
 
     const procInfo: ProcessInfo = { ...commandInfo, status: 'running', process: proc, pid: proc.pid };
@@ -261,5 +265,72 @@ export class ProcessManager extends EventEmitter {
     });
 
     await Promise.all(forceKillPromises);
+  }
+
+  private async killOne(procInfo: ProcessInfo): Promise<void> {
+    if (!procInfo.process || procInfo.process.killed) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let resolved = false;
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
+      }, 1000);
+
+      const onExit = () => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          resolve();
+        }
+      };
+
+      procInfo.process.once('exit', onExit);
+      this.killProcess(procInfo, 'SIGTERM');
+    });
+
+    if (!procInfo.process.killed) {
+      await new Promise<void>((resolve) => {
+        let resolved = false;
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        }, 500);
+
+        const onExit = () => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            resolve();
+          }
+        };
+
+        procInfo.process.once('exit', onExit);
+        this.killProcess(procInfo, 'SIGKILL');
+      });
+    }
+  }
+
+  async restart(processId: number): Promise<void> {
+    const procInfo = this.processes.get(processId);
+    if (!procInfo) {
+      return;
+    }
+
+    if (procInfo.process && !procInfo.process.killed) {
+      await this.killOne(procInfo);
+    }
+
+    this.startCommand({
+      id: procInfo.id,
+      name: procInfo.name,
+      command: procInfo.command
+    });
   }
 }
