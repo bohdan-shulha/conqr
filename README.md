@@ -108,7 +108,8 @@ npm start 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
   - **PageUp/PageDown**: Scroll logs 10 lines at a time (main pane)
   - **Home**: Jump to top of logs (main pane)
   - **End**: Jump to bottom of logs (main pane)
-  - **r**: Toggle raw mode (full-screen log view)
+  - **r**: Restart selected process (sidebar)
+  - **l**: Toggle raw mode (full-screen log view)
   - **q** or **Ctrl+C**: Quit application
 
 ## Requirements

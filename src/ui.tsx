@@ -253,7 +253,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
 
   useInput((input: string, key: any) => {
     if (rawMode) {
-      if (input === 'r' || input === 'R') {
+      if (input === 'l' || input === 'L') {
         setRawMode(false);
       } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
         resetTerminalMouseMode();
@@ -294,8 +294,12 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
         }
         setLogScrollOffset(Infinity);
       }
-    } else if (input === 'r' || input === 'R') {
+    } else if (input === 'l' || input === 'L') {
       setRawMode(prev => !prev);
+    } else if ((input === 'r' || input === 'R') && focusedPane === 'sidebar') {
+      if (selectedIndex !== ALL_PROCESSES_INDEX) {
+        processManager.restart(commands[selectedIndex].id);
+      }
     } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
       resetTerminalMouseMode();
       processManager.killAll().then(() => {
@@ -324,8 +328,8 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
   const helpText = rawMode
     ? ''
     : focusedPane === 'sidebar'
-    ? '←→: switch | r: raw mode | q: quit'
-    : '←→: switch | ↑↓: scroll | PageUp/Down: 10 lines | Home/End: top/bottom | r: raw mode | q: quit';
+    ? '←→: switch | r: restart | l: logs | q: quit'
+    : '←→: switch | ↑↓: scroll | PageUp/Down: 10 lines | Home/End: top/bottom | l: logs | q: quit';
 
   return (
     <Box flexDirection="column" width={terminalWidth} height={terminalHeight}>
@@ -421,7 +425,7 @@ function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane
   const visibleCommands = commands.slice(startCmdIndex, startCmdIndex + maxCommandsToShow);
 
   const helpText = focusedPane === 'sidebar'
-    ? '←→: switch | q: quit'
+    ? '←→: switch | r: restart | q: quit'
     : '←→: switch | ↑↓: scroll | Home/End: top/bottom | q: quit';
 
   return (
