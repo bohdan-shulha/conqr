@@ -80,8 +80,11 @@ interface TUIProps {
 const ALL_PROCESSES_INDEX = -1;
 
 function resetTerminalMouseMode() {
-  process.stdout.write('\x1b[?1006l');
   process.stdout.write('\x1b[?1000l');
+  process.stdout.write('\x1b[?1002l');
+  process.stdout.write('\x1b[?1003l');
+  process.stdout.write('\x1b[?1006l');
+  process.stdout.write('\x1b[?1015l');
   process.stdout.write('\x1b[?25h');
 }
 
@@ -403,7 +406,7 @@ function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane
 
   const isAllProcessesSelected = selectedIndex === ALL_PROCESSES_INDEX;
   const allProcessesBg = isAllProcessesSelected ? '#eeeeee' : undefined;
-  const allProcessesFg = isAllProcessesSelected ? '#000000' : '#d7d7d7';
+  const allProcessesFg = isAllProcessesSelected ? '#000000' : '#444444';
   const allProcessesDot = isAllProcessesSelected ? '• ' : '  ';
   const allProcessesName = 'All processes'.substring(0, width - 8);
   const allProcessesNamePadded = allProcessesName.padEnd(width - 8);
@@ -445,7 +448,7 @@ function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane
         const status = statuses.get(cmd.id) || 'unknown';
         const isSelected = actualIndex === selectedIndex;
         const itemBg = isSelected ? '#eeeeee' : undefined;
-        const itemFg = isSelected ? '#000000' : '#d7d7d7';
+  const itemFg = isSelected ? '#000000' : '#444444';
         const dotText = isSelected ? '• ' : '  ';
         const statusText = status === 'running' ? 'UP' : status === 'error' ? 'ERROR' : 'DOWN';
         const statusColor = status === 'running' ? '#00ff00' : status === 'error' ? '#ffaa00' : '#ff0000';
@@ -514,7 +517,9 @@ function LogsList({ logs, width, unifiedView, commands, useColors = true }: Logs
           const prefix = `[${cmd ? cmd.name : log.processId}] `;
           line = prefix + line;
         }
-        const lineColor = useColors ? (ansiColor || (log.source === 'stderr' ? '#ff0000' : '#ffffff')) : undefined;
+        const lineColor = useColors
+          ? (ansiColor || (log.source === 'stderr' ? '#ff0000' : undefined))
+          : undefined;
         const truncated = line.substring(0, width);
 
         return (
@@ -651,6 +656,10 @@ export function renderTUI(commands: CommandInfo[], processManager: ProcessManage
     resetTerminalMouseMode();
     await processManager.killAll();
   };
+
+  process.once('exit', () => {
+    resetTerminalMouseMode();
+  });
 
   process.on('SIGINT', () => {
     resetTerminalMouseMode();

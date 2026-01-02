@@ -63,7 +63,8 @@ export class ProcessManager extends EventEmitter {
 
     const proc = spawn(command, {
       shell: true,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true
     });
 
     proc.stdout?.setEncoding('utf8');
@@ -186,7 +187,11 @@ export class ProcessManager extends EventEmitter {
           procInfo.process.kill(signal);
         }
       } else {
-        procInfo.process.kill(signal);
+        try {
+          spawn('taskkill', ['/pid', pid.toString(), '/t', '/f'], { stdio: 'ignore' });
+        } catch {
+          procInfo.process.kill(signal);
+        }
       }
     } catch {
     }
