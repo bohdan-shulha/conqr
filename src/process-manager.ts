@@ -54,6 +54,7 @@ export class ProcessManager extends EventEmitter {
       /cannot/i,
       /uncaught/i,
       /unhandled/i,
+      /^\s+at .+\(.+:\d+:\d+\)$/,
     ];
     return hasRedAnsi || errorPatterns.some(pattern => pattern.test(line));
   }
@@ -167,7 +168,7 @@ export class ProcessManager extends EventEmitter {
     if (hasRecentError && procInfo.status === 'running') {
       procInfo.status = 'error';
       this.emit('status-change', { processId, status: 'error' } as StatusChangeEvent);
-    } else if (!hasRecentError && procInfo.status === 'error' && !procInfo.process.killed) {
+    } else if (!hasRecentError && procInfo.status === 'error' && procInfo.process.exitCode === null && !procInfo.process.killed) {
       procInfo.status = 'running';
       this.emit('status-change', { processId, status: 'running' } as StatusChangeEvent);
     }
