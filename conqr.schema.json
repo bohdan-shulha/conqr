@@ -3,10 +3,33 @@
   "title": "Conqr Configuration File",
   "description": "Configuration file for conqr - a dead-simple TUI process runner",
   "type": "object",
+  "$defs": {
+    "RestartConfig": {
+      "type": "object",
+      "description": "Configuration for automatic process restart behavior",
+      "properties": {
+        "policy": {
+          "type": "string",
+          "enum": ["never", "on-error", "on-exit"],
+          "description": "Restart policy: 'never' (no auto-restart), 'on-error' (restart only on non-zero exit), or 'on-exit' (restart on any exit)"
+        },
+        "delay": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Time in milliseconds to wait before attempting a restart"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "properties": {
     "$schema": {
       "type": "string",
       "description": "JSON Schema reference for IDE validation"
+    },
+    "restart": {
+      "$ref": "#/$defs/RestartConfig",
+      "description": "Global restart configuration applied to all commands by default"
     },
     "commands": {
       "description": "Commands to run concurrently. Can be an array of strings, an object with name-command pairs, or an array of objects with name and command properties.",
@@ -30,6 +53,10 @@
                   "command": {
                     "type": "string",
                     "description": "Command to execute"
+                  },
+                  "restart": {
+                    "$ref": "#/$defs/RestartConfig",
+                    "description": "Per-process restart configuration that overrides global settings"
                   }
                 },
                 "additionalProperties": false
@@ -93,6 +120,29 @@
           "command": "npm run build"
         },
         "npm run worker"
+      ]
+    },
+    {
+      "restart": {
+        "policy": "on-error",
+        "delay": 2000
+      },
+      "commands": ["npm run dev", "npm run worker"]
+    },
+    {
+      "restart": {
+        "policy": "on-error"
+      },
+      "commands": [
+        "npm run dev",
+        {
+          "name": "Worker",
+          "command": "npm run worker",
+          "restart": {
+            "policy": "on-exit",
+            "delay": 5000
+          }
+        }
       ]
     }
   ]

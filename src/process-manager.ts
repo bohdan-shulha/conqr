@@ -31,12 +31,14 @@ export class ProcessManager extends EventEmitter {
   private processes: Map<number, ProcessInfo>;
   private logBuffer: LogBuffer;
   private buffers: Map<number, ProcessBuffer>;
+  private restartTimeouts: Map<number, NodeJS.Timeout>;
 
   constructor(logBuffer: LogBuffer) {
     super();
     this.processes = new Map();
     this.logBuffer = logBuffer;
     this.buffers = new Map();
+    this.restartTimeouts = new Map();
   }
 
   private detectError(line: string): boolean {
@@ -119,6 +121,21 @@ export class ProcessManager extends EventEmitter {
         procInfo.status = code === 0 ? 'stopped' : 'error';
         procInfo.pid = proc.pid;
         this.emit('status-change', { processId: id, status: code === 0 ? 'stopped' : 'error' } as StatusChangeEvent);
+
+        // Check restart policy and schedule restart if needed (Requirements 1.4, 1.5, 1.6)
+        const restartConfig = procInfo.restart;
+        if (restartConfig) {
+          const { policy, delay } = restartConfig;
+          
+          if (policy === 'on-exit') {
+            // Requirement 1.6: Restart whenever process exits, regardless of exit code
+            this.scheduleRestart(id, delay);
+          } else if (policy === 'on-error' && code !== 0) {
+            // Requirement 1.5: Restart only when exit code is non-zero
+            this.scheduleRestart(id, delay);
+          }
+          // Requirement 1.4: If policy is 'never', do nothing (existing behavior)
+        }
       }
     });
 
@@ -203,6 +220,13 @@ export class ProcessManager extends EventEmitter {
   }
 
   async killAll(): Promise<void> {
+    // Clear all pending restart timeouts to prevent restarts during shutdown
+    // This ensures processes don't auto-restart while the application is shutting down
+    for (const timeout of this.restartTimeouts.values()) {
+      clearTimeout(timeout);
+    }
+    this.restartTimeouts.clear();
+
     const killPromises: Promise<void>[] = [];
 
     this.processes.forEach((procInfo) => {
@@ -319,6 +343,15 @@ export class ProcessManager extends EventEmitter {
   }
 
   async restart(processId: number): Promise<void> {
+    // Clear any pending auto-restart timeout for this process (Requirement 1.4)
+    // This prevents duplicate restarts when user manually restarts a process
+    // that already has an auto-restart scheduled
+    const pendingTimeout = this.restartTimeouts.get(processId);
+    if (pendingTimeout) {
+      clearTimeout(pendingTimeout);
+      this.restartTimeouts.delete(processId);
+    }
+
     const procInfo = this.processes.get(processId);
     if (!procInfo) {
       return;
@@ -333,5 +366,32 @@ export class ProcessManager extends EventEmitter {
       name: procInfo.name,
       command: procInfo.command
     });
+  }
+
+  private scheduleRestart(processId: number, delay: number): void {
+    // Clear any existing timeout for this process to prevent duplicate restarts
+    const existingTimeout = this.restartTimeouts.get(processId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    // Get process info for logging
+    const procInfo = this.processes.get(processId);
+    const processName = procInfo?.name ?? `Process ${processId}`;
+
+    // Log restart message with delay info (Requirement 3.1)
+    const delaySeconds = (delay / 1000).toFixed(1);
+    const restartMessage = `Restarting ${processName} in ${delaySeconds}s...`;
+    this.logBuffer.addLog(processId, restartMessage, 'stdout');
+    this.emit('log', { processId, line: restartMessage, source: 'stdout' } as LogEvent);
+
+    // Schedule restart via setTimeout (Requirement 1.7)
+    const timeout = setTimeout(() => {
+      this.restartTimeouts.delete(processId);
+      this.restart(processId);
+    }, delay);
+
+    // Store the timeout in the map
+    this.restartTimeouts.set(processId, timeout);
   }
 }

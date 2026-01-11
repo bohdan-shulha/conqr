@@ -1,7 +1,15 @@
+export type RestartPolicy = 'never' | 'on-error' | 'on-exit';
+
+export interface RestartConfig {
+  policy: RestartPolicy;
+  delay: number; // milliseconds
+}
+
 export interface CommandInfo {
   id: number;
   name: string;
   command: string;
+  restart?: RestartConfig;
 }
 
 export function parseCommands(): CommandInfo[] {
