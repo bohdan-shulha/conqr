@@ -38,8 +38,25 @@ export interface CommandObject {
   restart?: Partial<RestartConfig>;
 }
 
+/**
+ * Extended command configuration for object command values.
+ * Used when a command entry value is an object instead of a simple string.
+ */
+export interface ExtendedCommandConfig {
+  /** The command string to execute (required) */
+  command: string;
+  /** Optional per-process restart configuration */
+  restart?: Partial<RestartConfig>;
+}
+
+/**
+ * Command value can be a simple string (the command to execute)
+ * or an extended config object with command and optional restart settings.
+ */
+export type CommandValue = string | ExtendedCommandConfig;
+
 export interface ConfigFile {
-  commands?: Array<string | CommandObject> | Record<string, string>;
+  commands: Record<string, CommandValue>;
   restart?: Partial<RestartConfig>;
 }
 
@@ -63,9 +80,16 @@ export function loadConfig(): CommandInfo[] | null {
   return null;
 }
 
-function parseConfigCommands(config: ConfigFile): CommandInfo[] {
+function parseConfigCommands(config: ConfigFile): CommandInfo[] | null {
   if (!config.commands) {
     return [];
+  }
+
+  // Check for array format - no longer supported (Requirements 1.2, 5.1, 5.2)
+  if (Array.isArray(config.commands)) {
+    console.error('Error: Array format for commands is no longer supported.');
+    console.error('Please use object format: { "name": "command" } or { "name": { "command": "..." } }');
+    return null;
   }
 
   const commands: CommandInfo[] = [];
@@ -73,45 +97,40 @@ function parseConfigCommands(config: ConfigFile): CommandInfo[] {
   // Extract global restart config from config file root
   const globalRestart = config.restart;
 
-  if (Array.isArray(config.commands)) {
-    config.commands.forEach((cmd, index) => {
-      if (typeof cmd === 'string') {
-        // String command: apply only global restart defaults
-        commands.push({
-          id: index,
-          name: extractCommandName(cmd),
-          command: cmd,
-          restart: resolveRestartConfig(globalRestart, undefined)
-        });
-      } else if (typeof cmd === 'object' && cmd.name && cmd.command) {
-        // CommandObject: extract per-process restart and merge with global
-        const perProcessRestart = cmd.restart;
-        commands.push({
-          id: index,
-          name: cmd.name,
-          command: cmd.command,
-          restart: resolveRestartConfig(globalRestart, perProcessRestart)
-        });
-      }
-    });
-  } else if (typeof config.commands === 'object') {
-    // Record<string, string> format: apply only global restart defaults
-    let index = 0;
-    for (const [name, command] of Object.entries(config.commands)) {
+  // Record<string, CommandValue> format: process object entries
+  let index = 0;
+  for (const [name, value] of Object.entries(config.commands)) {
+    if (typeof value === 'string') {
+      // Simple command: string value (Requirements 2.1, 2.2, 2.3)
+      // - Key is used as the process display name
+      // - Value is the command to execute
+      // - Global restart config is applied
       commands.push({
         id: index++,
         name,
-        command: typeof command === 'string' ? command : String(command),
+        command: value,
         restart: resolveRestartConfig(globalRestart, undefined)
       });
+    } else if (typeof value === 'object' && value !== null) {
+      // Extended command: object value (Requirements 3.1, 3.2, 3.3, 3.4)
+      if (value.command) {
+        // Valid extended command with required 'command' property
+        // - Key is used as the process display name
+        // - value.command is the command to execute
+        // - Per-process restart config is merged with global restart config
+        commands.push({
+          id: index++,
+          name,
+          command: value.command,
+          restart: resolveRestartConfig(globalRestart, value.restart)
+        });
+      } else {
+        // Invalid extended command: missing required 'command' property (Requirement 3.4)
+        console.warn(`Warning: Command entry "${name}" is missing required "command" property, skipping.`);
+        continue;
+      }
     }
   }
 
   return commands;
-}
-
-function extractCommandName(command: string): string {
-  const firstWord = command.trim().split(/\s+/)[0];
-  const basename = firstWord.split('/').pop();
-  return basename || `cmd${Date.now()}`;
 }
