@@ -20,18 +20,7 @@ conqr 'Dev Server'='npm run dev' 'Build Process'='npm run build' 'Worker'='npm r
 
 Create a `conqr.json` or `.conqr.json` file in your project directory:
 
-**Array of commands:**
-```json
-{
-  "commands": [
-    "npm run dev",
-    "npm run build",
-    "npm run worker"
-  ]
-}
-```
-
-**Object with custom names:**
+**Simple commands (string values):**
 ```json
 {
   "commands": {
@@ -42,19 +31,38 @@ Create a `conqr.json` or `.conqr.json` file in your project directory:
 }
 ```
 
-**Array of objects:**
+**Extended commands (with restart options):**
 ```json
 {
-  "commands": [
-    {
-      "name": "Dev Server",
-      "command": "npm run dev"
+  "commands": {
+    "Dev Server": {
+      "command": "npm run dev",
+      "restart": {
+        "policy": "on-error",
+        "delay": 2000
+      }
     },
-    {
-      "name": "Build Process",
-      "command": "npm run build"
+    "Worker": {
+      "command": "npm run worker",
+      "restart": {
+        "policy": "on-exit",
+        "delay": 5000
+      }
     }
-  ]
+  }
+}
+```
+
+**Mixed simple and extended:**
+```json
+{
+  "commands": {
+    "Dev Server": "npm run dev",
+    "Worker": {
+      "command": "npm run worker",
+      "restart": { "policy": "on-error" }
+    }
+  }
 }
 ```
 
@@ -65,6 +73,49 @@ conqr
 
 CLI arguments take precedence over the config file if both are provided.
 
+### Restart Configuration
+
+Configure automatic restart behavior for processes that crash or exit.
+
+**Restart policies:**
+- `"never"` - No automatic restart (default)
+- `"on-error"` - Restart only when process exits with non-zero code
+- `"on-exit"` - Restart whenever process exits, regardless of exit code
+
+**Global restart (applies to all commands):**
+```json
+{
+  "restart": {
+    "policy": "on-error",
+    "delay": 2000
+  },
+  "commands": {
+    "Dev Server": "npm run dev",
+    "Worker": "npm run worker"
+  }
+}
+```
+
+**Per-process restart (overrides global):**
+```json
+{
+  "restart": {
+    "policy": "on-error",
+    "delay": 2000
+  },
+  "commands": {
+    "Dev Server": "npm run dev",
+    "Worker": {
+      "command": "npm run worker",
+      "restart": {
+        "policy": "on-exit",
+        "delay": 5000
+      }
+    }
+  }
+}
+```
+
 ### JSON Schema
 
 For IDE autocomplete and validation, add a `$schema` reference to your config file:
@@ -72,10 +123,10 @@ For IDE autocomplete and validation, add a `$schema` reference to your config fi
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/bohdan-shulha/conqr/main/conqr.schema.json",
-  "commands": [
-    "npm run dev",
-    "npm run build"
-  ]
+  "commands": {
+    "Dev Server": "npm run dev",
+    "Build": "npm run build"
+  }
 }
 ```
 
@@ -100,6 +151,7 @@ npm start 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
 - Auto-scroll to bottom when new logs arrive (can be disabled by scrolling up)
 - Mouse wheel scrolling support
 - Raw mode for full-screen log viewing (press `r` to toggle)
+- Automatic process restart with configurable policies (`never`, `on-error`, `on-exit`)
 - Keyboard controls:
   - **Arrow Left/Right**: Switch focus between sidebar and main pane
   - **Arrow Up/Down**:

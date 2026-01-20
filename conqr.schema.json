@@ -32,64 +32,43 @@
       "description": "Global restart configuration applied to all commands by default"
     },
     "commands": {
-      "description": "Commands to run concurrently. Can be an array of strings, an object with name-command pairs, or an array of objects with name and command properties.",
-      "oneOf": [
-        {
-          "type": "array",
-          "items": {
-            "oneOf": [
-              {
-                "type": "string",
-                "description": "Command string. The command name will be auto-extracted from the first word."
-              },
-              {
-                "type": "object",
-                "required": ["name", "command"],
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "description": "Display name for the process"
-                  },
-                  "command": {
-                    "type": "string",
-                    "description": "Command to execute"
-                  },
-                  "restart": {
-                    "$ref": "#/$defs/RestartConfig",
-                    "description": "Per-process restart configuration that overrides global settings"
-                  }
-                },
-                "additionalProperties": false
-              }
-            ]
-          },
-          "minItems": 1
-        },
-        {
-          "type": "object",
-          "patternProperties": {
-            ".*": {
+      "description": "Commands to run concurrently as an object with name-command pairs.",
+      "type": "object",
+      "patternProperties": {
+        "^.+$": {
+          "oneOf": [
+            {
               "type": "string",
-              "description": "Command to execute. The key is used as the display name."
+              "description": "Simple command: the command string to execute. The key is used as the display name."
+            },
+            {
+              "type": "object",
+              "description": "Extended command: object with command and optional restart configuration.",
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "description": "The command string to execute"
+                },
+                "restart": {
+                  "$ref": "#/$defs/RestartConfig",
+                  "description": "Per-process restart configuration that overrides global settings"
+                }
+              },
+              "required": ["command"],
+              "additionalProperties": false
             }
-          },
-          "additionalProperties": false,
-          "minProperties": 1
+          ]
         }
-      ]
+      },
+      "additionalProperties": false,
+      "minProperties": 1
     }
   },
   "required": ["commands"],
   "additionalProperties": false,
   "examples": [
     {
-      "commands": [
-        "npm run dev",
-        "npm run build",
-        "npm run worker"
-      ]
-    },
-    {
+      "$comment": "Example 1: Simple commands only (string values)",
       "commands": {
         "Dev Server": "npm run dev",
         "Build Process": "npm run build",
@@ -97,53 +76,65 @@
       }
     },
     {
-      "commands": [
-        {
-          "name": "Dev Server",
+      "$comment": "Example 2: Extended commands only (object values with command property)",
+      "commands": {
+        "Dev Server": {
           "command": "npm run dev"
         },
-        {
-          "name": "Build Process",
+        "Build Process": {
           "command": "npm run build"
         },
-        {
-          "name": "Worker",
-          "command": "npm run worker"
+        "Worker": {
+          "command": "npm run worker",
+          "restart": {
+            "policy": "on-error"
+          }
         }
-      ]
+      }
     },
     {
-      "commands": [
-        "npm run dev",
-        {
-          "name": "Build Process",
+      "$comment": "Example 3: Mixed simple and extended commands",
+      "commands": {
+        "Dev Server": "npm run dev",
+        "Build Process": {
           "command": "npm run build"
         },
-        "npm run worker"
-      ]
+        "Worker": {
+          "command": "npm run worker",
+          "restart": {
+            "policy": "on-error",
+            "delay": 3000
+          }
+        }
+      }
     },
     {
+      "$comment": "Example 4: With global restart config",
       "restart": {
         "policy": "on-error",
         "delay": 2000
       },
-      "commands": ["npm run dev", "npm run worker"]
+      "commands": {
+        "Dev Server": "npm run dev",
+        "Worker": "npm run worker"
+      }
     },
     {
+      "$comment": "Example 5: With per-process restart config overriding global",
       "restart": {
-        "policy": "on-error"
+        "policy": "on-error",
+        "delay": 2000
       },
-      "commands": [
-        "npm run dev",
-        {
-          "name": "Worker",
+      "commands": {
+        "Dev Server": "npm run dev",
+        "Worker": {
           "command": "npm run worker",
           "restart": {
             "policy": "on-exit",
             "delay": 5000
           }
         }
-      ]
+      }
     }
   ]
 }
