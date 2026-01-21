@@ -2,8 +2,39 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { render, Box, Text, useInput, useApp, useStdin } from 'ink';
 import stripAnsi from 'strip-ansi';
 import { CommandInfo } from './cli.js';
-import { ProcessManager } from './process-manager.js';
+import { ProcessManager, RestartStateChangeEvent, LogEvent } from './process-manager.js';
 import { LogBuffer, LogEntry } from './log-buffer.js';
+
+function truncateToDisplayWidth(text: string, maxWidth: number): string {
+  let width = 0;
+  let result = '';
+  for (const char of text) {
+    const charWidth = char.length;
+    if (width + charWidth > maxWidth) {
+      break;
+    }
+    result += char;
+    width += charWidth;
+  }
+  return result;
+}
+
+function padStartByDisplayWidth(text: string, targetWidth: number, padChar = ' '): string {
+  const truncated = truncateToDisplayWidth(text, targetWidth);
+  const textWidth = truncated.length;
+  if (textWidth >= targetWidth) {
+    return truncated;
+  }
+  return padChar.repeat(targetWidth - textWidth) + truncated;
+}
+
+function padEndByDisplayWidth(text: string, targetWidth: number, padChar = ' '): string {
+  const textWidth = text.length;
+  if (textWidth >= targetWidth) {
+    return truncateToDisplayWidth(text, targetWidth);
+  }
+  return text + padChar.repeat(targetWidth - textWidth);
+}
 
 function detectAnsiColor(line: string): string | null {
   const ansiColorRegex = /\x1b\[(\d+)(?:;(\d+))?(?:;(\d+))?(?:;(\d+))?(?:;(\d+))?m/g;
@@ -151,6 +182,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
   const [statuses, setStatuses] = useState<Map<number, string>>(new Map());
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [rawMode, setRawMode] = useState(false);
+  const [restartStates, setRestartStates] = useState<Map<number, { isRestarting: boolean; restartCount: number; crashCount: number }>>(new Map());
   const { exit } = useApp();
 
   const sidebarWidth = 30;
@@ -210,15 +242,40 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
       }
     };
 
+    const updateRestartStates = (event: RestartStateChangeEvent) => {
+      setRestartStates(prev => {
+        const newMap = new Map(prev);
+        newMap.set(event.processId, {
+          isRestarting: event.isRestarting,
+          restartCount: event.restartCount,
+          crashCount: event.crashCount
+        });
+        return newMap;
+      });
+    };
+
     processManager.on('status-change', updateStatuses);
     processManager.on('log', updateLogs);
+    processManager.on('restart-state-change', updateRestartStates);
 
     updateStatuses();
     updateLogs();
 
+    // Initialize restart states for all commands
+    const initialRestartStates = new Map<number, { isRestarting: boolean; restartCount: number; crashCount: number }>();
+    commands.forEach(cmd => {
+      initialRestartStates.set(cmd.id, {
+        isRestarting: processManager.isRestarting(cmd.id),
+        restartCount: processManager.getRestartCount(cmd.id),
+        crashCount: processManager.getCrashCount(cmd.id)
+      });
+    });
+    setRestartStates(initialRestartStates);
+
     return () => {
       processManager.removeAllListeners('status-change');
       processManager.removeAllListeners('log');
+      processManager.removeAllListeners('restart-state-change');
     };
   }, [commands, processManager, logBuffer, selectedIndex]);
 
@@ -256,6 +313,11 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
       if (input === 'l' || input === 'L') {
         setRawMode(false);
       } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
+        const shutdownMessage = '› Shutting down all processes, SIGTERM signal sent';
+        commands.forEach(cmd => {
+          logBuffer.addLog(cmd.id, shutdownMessage, 'stdout', true);
+          processManager.emit('log', { processId: cmd.id, line: shutdownMessage, source: 'stdout' } as LogEvent);
+        });
         resetTerminalMouseMode();
         processManager.killAll().then(() => {
           exit();
@@ -298,9 +360,14 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
       setRawMode(prev => !prev);
     } else if ((input === 'r' || input === 'R') && focusedPane === 'sidebar') {
       if (selectedIndex !== ALL_PROCESSES_INDEX) {
-        processManager.restart(commands[selectedIndex].id);
+        processManager.restart(commands[selectedIndex].id, true); // true = manual restart
       }
     } else if (input === 'q' || input === 'Q' || (key.ctrl && input === 'c')) {
+      const shutdownMessage = '› Shutting down all processes, SIGTERM signal sent';
+      commands.forEach(cmd => {
+        logBuffer.addLog(cmd.id, shutdownMessage, 'stdout', true);
+        processManager.emit('log', { processId: cmd.id, line: shutdownMessage, source: 'stdout' } as LogEvent);
+      });
       resetTerminalMouseMode();
       processManager.killAll().then(() => {
         exit();
@@ -312,7 +379,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
     }
   });
 
-  const effectiveDisplayHeight = rawMode ? terminalHeight : displayHeight;
+  const effectiveDisplayHeight = rawMode ? terminalHeight : displayHeight - 1;
   const wasAtBottom = logScrollOffset === Infinity ||
     (logScrollOffset >= logs.length - effectiveDisplayHeight && logs.length > effectiveDisplayHeight);
 
@@ -342,6 +409,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
             selectedIndex={selectedIndex}
             statuses={statuses}
             focusedPane={focusedPane}
+            restartStates={restartStates}
           />
           <Separator height={contentHeight} />
           <MainPane
@@ -354,10 +422,11 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
             commands={commands}
             logScrollOffset={logScrollOffset}
             totalLogs={logs.length}
-            displayHeight={displayHeight}
+            displayHeight={effectiveDisplayHeight}
             onScrollChange={setLogScrollOffset}
             enableInput={true}
             enableKeyboardInput={focusedPane === 'main'}
+            restartStates={restartStates}
           />
         </Box>
       )}
@@ -378,6 +447,7 @@ export function TUI({ commands, processManager, logBuffer }: TUIProps) {
           enableKeyboardInput={true}
           showHeader={false}
           useColors={false}
+          restartStates={restartStates}
         />
       )}
       {!rawMode && (
@@ -398,9 +468,10 @@ interface SidebarProps {
   selectedIndex: number;
   statuses: Map<number, string>;
   focusedPane: PaneFocus;
+  restartStates: Map<number, { isRestarting: boolean; restartCount: number; crashCount: number }>;
 }
 
-function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane }: SidebarProps) {
+function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane, restartStates }: SidebarProps) {
   const headerBg = focusedPane === 'sidebar' ? '#0055ff' : '#585858';
   const headerFg = '#ffffff';
   const headerText = focusedPane === 'sidebar' ? '▶ Commands ' : '  Commands ';
@@ -450,27 +521,40 @@ function Sidebar({ width, height, commands, selectedIndex, statuses, focusedPane
       {visibleCommands.map((cmd, idx) => {
         const actualIndex = startCmdIndex + idx;
         const status = statuses.get(cmd.id) || 'unknown';
+        const restartState = restartStates.get(cmd.id);
+        const isRestarting = restartState?.isRestarting || false;
         const isSelected = actualIndex === selectedIndex;
         const itemBg = isSelected ? '#eeeeee' : undefined;
-  const itemFg = isSelected ? '#000000' : '#444444';
+        const itemFg = isSelected ? '#000000' : '#444444';
         const dotText = isSelected ? '• ' : '  ';
-        const statusText = status === 'running' ? 'UP' : status === 'error' ? 'ERROR' : 'DOWN';
         const statusColor = status === 'running' ? '#00ff00' : status === 'error' ? '#ffaa00' : '#ff0000';
-        const statusWidth = statusText.length + 1;
+        // Reserve fixed width of 8 terminal cells for status to prevent layout shifts
+        const statusWidth = 8;
         const nameMaxWidth = width - 2 - statusWidth;
         const name = cmd.name.substring(0, nameMaxWidth);
+        let statusText = status === 'running' ? 'UP' : status === 'error' ? 'ERROR' : 'DOWN';
+        if (isRestarting && status !== 'running') {
+          statusText = '› DOWN';
+        }
+        const statusWithPadding = padStartByDisplayWidth(statusText, statusWidth);
 
         return (
-          <Box key={cmd.id} width={width} height={1}>
-            <Text backgroundColor={itemBg} color={itemFg} bold={isSelected}>
-              {dotText}
-            </Text>
-            <Text backgroundColor={itemBg} color={itemFg} bold={isSelected}>
-              {name.padEnd(nameMaxWidth)}
-            </Text>
-            <Text backgroundColor={itemBg} color={statusColor}>
-              {' ' + statusText}
-            </Text>
+          <Box key={cmd.id} width={width} height={1} flexDirection="row">
+            <Box width={2}>
+              <Text backgroundColor={itemBg} color={itemFg} bold={isSelected}>
+                {dotText}
+              </Text>
+            </Box>
+            <Box width={nameMaxWidth}>
+              <Text backgroundColor={itemBg} color={itemFg} bold={isSelected}>
+                {name.padEnd(nameMaxWidth)}
+              </Text>
+            </Box>
+            <Box width={statusWidth}>
+              <Text backgroundColor={itemBg} color={statusColor}>
+                {statusWithPadding}
+              </Text>
+            </Box>
           </Box>
         );
       })}
@@ -516,19 +600,58 @@ function LogsList({ logs, width, unifiedView, commands, useColors = true }: Logs
       {logs.map((log, i) => {
         const ansiColor = useColors ? detectAnsiColor(log.line) : null;
         let line = stripAnsi(log.line);
+        const originalLine = line;
+        let prefix = '';
+
         if (unifiedView && log.processId !== undefined) {
           const cmd = commands.find(c => c.id === log.processId);
-          const prefix = `[${cmd ? cmd.name : log.processId}] `;
+          prefix = `[${cmd ? cmd.name : log.processId}] `;
           line = prefix + line;
         }
+
+        const isSystem = log.isSystem === true;
         const lineColor = useColors
-          ? (ansiColor || (log.source === 'stderr' ? '#ff0000' : undefined))
+          ? (isSystem
+              ? '#ffffff' // White for system messages to be clearly visible on dark background
+              : (ansiColor || (log.source === 'stderr' ? '#ff0000' : undefined)))
           : undefined;
-        const truncated = line.substring(0, width);
+        const backgroundColor = useColors && isSystem ? '#2a2a2a' : undefined;
+        const paddingLeft = isSystem ? 2 : 0;
+
+        // Check if this is a non-zero exit code message
+        const isNonZeroExitCode = isSystem && useColors && originalLine.startsWith('× Process exited with code');
+
+        if (isNonZeroExitCode) {
+          // Color the entire exit code message in red for better visibility
+          const truncated = truncateToDisplayWidth(line, width - paddingLeft);
+          const paddedLine = isSystem ? '  ' + truncated : truncated;
+          const finalLine = useColors ? padEndByDisplayWidth(paddedLine, width) : paddedLine;
+
+          return (
+            <Text
+              key={i}
+              color="#ff0000"
+              backgroundColor={backgroundColor}
+              italic={isSystem}
+            >
+              {finalLine}
+            </Text>
+          );
+        }
+
+        // Regular rendering for non-exit-code messages
+        const truncated = truncateToDisplayWidth(line, width - paddingLeft);
+        const paddedLine = isSystem ? '  ' + truncated : truncated;
+        const finalLine = useColors ? padEndByDisplayWidth(paddedLine, width) : paddedLine;
 
         return (
-          <Text key={i} color={lineColor}>
-            {useColors ? truncated.padEnd(width) : truncated}
+          <Text
+            key={i}
+            color={lineColor}
+            backgroundColor={backgroundColor}
+            italic={isSystem}
+          >
+            {finalLine}
           </Text>
         );
       })}
@@ -552,12 +675,36 @@ interface MainPaneProps {
   onScrollChange: (offset: number) => void;
   enableInput?: boolean;
   enableKeyboardInput?: boolean;
+  restartStates: Map<number, { isRestarting: boolean; restartCount: number; crashCount: number }>;
 }
 
-function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPane, commands, logScrollOffset, totalLogs, displayHeight, showHeader = true, useColors = true, onScrollChange, enableInput = true, enableKeyboardInput = true }: MainPaneProps) {
+function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPane, commands, logScrollOffset, totalLogs, displayHeight, showHeader = true, useColors = true, onScrollChange, enableInput = true, enableKeyboardInput = true, restartStates }: MainPaneProps) {
   const title = unifiedView ? ' All Logs ' : ` ${selectedCommand?.name || ''} - ${selectedCommand?.command || ''} `;
   const headerBg = focusedPane === 'main' ? '#0055ff' : '#585858';
   const headerFg = '#ffffff';
+
+  // Calculate restart and crash counts
+  let restartCount = 0;
+  let crashCount = 0;
+  if (unifiedView) {
+    commands.forEach(cmd => {
+      const state = restartStates.get(cmd.id);
+      if (state) {
+        restartCount += state.restartCount;
+        crashCount += state.crashCount;
+      }
+    });
+  } else if (selectedCommand) {
+    const state = restartStates.get(selectedCommand.id);
+    if (state) {
+      restartCount = state.restartCount;
+      crashCount = state.crashCount;
+    }
+  }
+
+  const indicatorsText = (restartCount > 0 || crashCount > 0)
+    ? `🔄 ${restartCount} ❌ ${crashCount} `
+    : '';
   const headerText = focusedPane === 'main' ? '▶' + title : ' ' + title;
 
   const isScrolledUp = logScrollOffset !== Infinity;
@@ -635,8 +782,13 @@ function MainPane({ width, height, unifiedView, selectedCommand, logs, focusedPa
       {showHeader && (
         <Box width={width} height={1}>
           <Text backgroundColor={headerBg} color={headerFg} bold={focusedPane === 'main'}>
-            {headerText.padEnd(width)}
+            {headerText.padEnd(width - (indicatorsText ? indicatorsText.length : 0))}
           </Text>
+          {indicatorsText && (
+            <Text backgroundColor={headerBg} color={headerFg}>
+              {indicatorsText}
+            </Text>
+          )}
         </Box>
       )}
       <Box flexDirection="column" width={width} height={logAreaHeight}>
