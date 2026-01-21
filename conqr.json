@@ -1,0 +1,29 @@
+{
+  "$schema": "./conqr.schema.json",
+
+  "commands": {
+    "Long Running": "node demo/loader-long-running.js",
+
+    "Error Emitter": "node demo/loader-error-emitter.js",
+
+    "Exit Normal 5s": "node demo/loader-exit-normal-5s.js",
+
+    "Exit Error 7s": "node demo/loader-exit-error-7s.js",
+
+    "Exit Normal 9s Restart": {
+      "command": "node demo/loader-exit-normal-9s-restart.js",
+      "restart": {
+        "policy": "on-exit",
+        "delay": 2000
+      }
+    },
+
+    "Exit Error 11s Restart": {
+      "command": "node demo/loader-exit-error-11s-restart.js",
+      "restart": {
+        "policy": "on-error",
+        "delay": 2000
+      }
+    }
+  }
+}

@@ -5,6 +5,7 @@ export interface LogEntry {
   source: 'stdout' | 'stderr';
   timestamp: number;
   processId?: number;
+  isSystem?: boolean;
 }
 
 export class LogBuffer {
@@ -18,19 +19,19 @@ export class LogBuffer {
     this.maxLines = MAX_LINES_PER_PROCESS;
   }
 
-  addLog(processId: number, line: string, source: 'stdout' | 'stderr' = 'stdout'): void {
+  addLog(processId: number, line: string, source: 'stdout' | 'stderr' = 'stdout', isSystem: boolean = false): void {
     if (!this.buffers.has(processId)) {
       this.buffers.set(processId, []);
     }
 
     const buffer = this.buffers.get(processId)!;
-    buffer.push({ line, source, timestamp: Date.now() });
+    buffer.push({ line, source, timestamp: Date.now(), isSystem });
 
     if (buffer.length > this.maxLines) {
       buffer.shift();
     }
 
-    this.unifiedBuffer.push({ processId, line, source, timestamp: Date.now() });
+    this.unifiedBuffer.push({ processId, line, source, timestamp: Date.now(), isSystem });
     if (this.unifiedBuffer.length > this.maxLines * 10) {
       this.unifiedBuffer.shift();
     }
