@@ -42,6 +42,7 @@ export class ProcessManager extends EventEmitter {
   private restartCounts: Map<number, number>;
   private crashCounts: Map<number, number>;
   private isRestartingMap: Map<number, boolean>;
+  private intentionalExitProcesses: Set<ChildProcess>;
 
   constructor(logBuffer: LogBuffer) {
     super();
@@ -52,6 +53,7 @@ export class ProcessManager extends EventEmitter {
     this.restartCounts = new Map();
     this.crashCounts = new Map();
     this.isRestartingMap = new Map();
+    this.intentionalExitProcesses = new Set();
   }
 
   private detectError(line: string): boolean {
@@ -154,6 +156,10 @@ export class ProcessManager extends EventEmitter {
     });
 
     proc.on('exit', (code: number | null) => {
+      const wasIntentionalExit = this.intentionalExitProcesses.has(proc);
+      this.intentionalExitProcesses.delete(proc);
+      const hasNonZeroExitCode = typeof code === 'number' && code !== 0;
+
       const procInfo = this.processes.get(id);
       if (procInfo && procInfo.process === proc) {
         // Flush any remaining buffer data before logging exit message
@@ -178,7 +184,7 @@ export class ProcessManager extends EventEmitter {
         this.emit('status-change', { processId: id, status: 'stopped' } as StatusChangeEvent);
 
         // Increment crash count for non-zero exits
-        if (code !== 0) {
+        if (hasNonZeroExitCode && !wasIntentionalExit) {
           const currentCrashCount = this.crashCounts.get(id) || 0;
           this.crashCounts.set(id, currentCrashCount + 1);
           this.emitRestartStateChange(id);
@@ -187,14 +193,14 @@ export class ProcessManager extends EventEmitter {
         // Check restart policy and schedule restart if needed (Requirements 1.4, 1.5, 1.6)
         const restartConfig = procInfo.restart;
         let willRestart = false;
-        if (restartConfig) {
+        if (restartConfig && !wasIntentionalExit) {
           const { policy, delay } = restartConfig;
 
           if (policy === 'on-exit') {
             // Requirement 1.6: Restart whenever process exits, regardless of exit code
             this.scheduleRestart(id, delay, code);
             willRestart = true;
-          } else if (policy === 'on-error' && code !== 0) {
+          } else if (policy === 'on-error' && hasNonZeroExitCode) {
             // Requirement 1.5: Restart only when exit code is non-zero
             this.scheduleRestart(id, delay, code);
             willRestart = true;
@@ -275,6 +281,7 @@ export class ProcessManager extends EventEmitter {
     }
 
     try {
+      this.intentionalExitProcesses.add(procInfo.process);
       const pid = procInfo.process.pid;
       if (!pid) {
         return;
