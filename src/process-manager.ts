@@ -8,6 +8,7 @@ export type ProcessStatus = 'running' | 'stopped' | 'error' | 'unknown';
 interface ProcessInfo extends CommandInfo {
   status: ProcessStatus;
   process: ChildProcess;
+  runId: number;
   pid?: number;
 }
 
@@ -42,6 +43,7 @@ export class ProcessManager extends EventEmitter {
   private restartCounts: Map<number, number>;
   private crashCounts: Map<number, number>;
   private isRestartingMap: Map<number, boolean>;
+  private restartInFlight: Set<number>;
   private intentionalExitProcesses: Set<ChildProcess>;
 
   constructor(logBuffer: LogBuffer) {
@@ -53,6 +55,7 @@ export class ProcessManager extends EventEmitter {
     this.restartCounts = new Map();
     this.crashCounts = new Map();
     this.isRestartingMap = new Map();
+    this.restartInFlight = new Set();
     this.intentionalExitProcesses = new Set();
   }
 
@@ -78,6 +81,7 @@ export class ProcessManager extends EventEmitter {
 
   startCommand(commandInfo: CommandInfo): ChildProcess {
     const { id, name, command } = commandInfo;
+    const runId = (this.processes.get(id)?.runId || 0) + 1;
 
     const proc = spawn(command, {
       shell: true,
@@ -198,11 +202,11 @@ export class ProcessManager extends EventEmitter {
 
           if (policy === 'on-exit') {
             // Requirement 1.6: Restart whenever process exits, regardless of exit code
-            this.scheduleRestart(id, delay, code);
+            this.scheduleRestart(id, delay, code, procInfo.runId);
             willRestart = true;
           } else if (policy === 'on-error' && hasNonZeroExitCode) {
             // Requirement 1.5: Restart only when exit code is non-zero
-            this.scheduleRestart(id, delay, code);
+            this.scheduleRestart(id, delay, code, procInfo.runId);
             willRestart = true;
           }
           // Requirement 1.4: If policy is 'never', do nothing (existing behavior)
@@ -223,7 +227,7 @@ export class ProcessManager extends EventEmitter {
     this.logBuffer.addLog(id, startMessage, 'stdout', true);
     this.emit('log', { processId: id, line: startMessage, source: 'stdout' } as LogEvent);
 
-    const procInfo: ProcessInfo = { ...commandInfo, status: 'running', process: proc, pid: proc.pid };
+    const procInfo: ProcessInfo = { ...commandInfo, status: 'running', process: proc, runId, pid: proc.pid };
     this.processes.set(id, procInfo);
     this.emit('status-change', { processId: id, status: 'running' } as StatusChangeEvent);
 
@@ -433,50 +437,71 @@ export class ProcessManager extends EventEmitter {
   }
 
   async restart(processId: number, isManual: boolean = false): Promise<void> {
-    // Clear any pending auto-restart timeout for this process (Requirement 1.4)
-    // This prevents duplicate restarts when user manually restarts a process
-    // that already has an auto-restart scheduled
-    const pendingTimeout = this.restartTimeouts.get(processId);
-    if (pendingTimeout) {
-      clearTimeout(pendingTimeout);
-      this.restartTimeouts.delete(processId);
-    }
-
-    const procInfo = this.processes.get(processId);
-    if (!procInfo) {
+    if (this.restartInFlight.has(processId)) {
       return;
     }
 
-    // Log manual restart message immediately when restart is initiated
-    if (isManual) {
-      const restartMessage = '› Restart initiated, SIGTERM signal sent';
-      this.logBuffer.addLog(processId, restartMessage, 'stdout', true);
-      this.emit('log', { processId, line: restartMessage, source: 'stdout' } as LogEvent);
+    this.restartInFlight.add(processId);
+
+    try {
+      await Promise.resolve();
+
+      // Clear any pending auto-restart timeout for this process (Requirement 1.4)
+      // This prevents duplicate restarts when user manually restarts a process
+      // that already has an auto-restart scheduled
+      const pendingTimeout = this.restartTimeouts.get(processId);
+      if (pendingTimeout) {
+        clearTimeout(pendingTimeout);
+        this.restartTimeouts.delete(processId);
+      }
+
+      const procInfo = this.processes.get(processId);
+      if (!procInfo) {
+        return;
+      }
+
+      if (this.isRestartingMap.get(processId)) {
+        this.isRestartingMap.set(processId, false);
+        this.emitRestartStateChange(processId);
+      }
+
+      // Log manual restart message immediately when restart is initiated
+      if (isManual) {
+        const hasLiveProcess = procInfo.process.exitCode === null && !procInfo.process.killed;
+        const restartMessage = hasLiveProcess
+          ? '› Restart initiated, SIGTERM signal sent'
+          : '› Restart initiated';
+        this.logBuffer.addLog(processId, restartMessage, 'stdout', true);
+        this.emit('log', { processId, line: restartMessage, source: 'stdout' } as LogEvent);
+      }
+
+      const hasLiveProcess = procInfo.process.exitCode === null && !procInfo.process.killed;
+      if (hasLiveProcess) {
+        await this.killOne(procInfo);
+      }
+
+      // Increment restart count
+      const currentRestartCount = this.restartCounts.get(processId) || 0;
+      this.restartCounts.set(processId, currentRestartCount + 1);
+
+      // Set restarting state to false since we're about to start the new process
+      this.isRestartingMap.set(processId, false);
+
+      this.startCommand({
+        id: procInfo.id,
+        name: procInfo.name,
+        command: procInfo.command,
+        restart: procInfo.restart
+      });
+
+      // Emit restart state change after restart completes
+      this.emitRestartStateChange(processId);
+    } finally {
+      this.restartInFlight.delete(processId);
     }
-
-    if (procInfo.process && !procInfo.process.killed) {
-      await this.killOne(procInfo);
-    }
-
-    // Increment restart count
-    const currentRestartCount = this.restartCounts.get(processId) || 0;
-    this.restartCounts.set(processId, currentRestartCount + 1);
-
-    // Set restarting state to false since we're about to start the new process
-    this.isRestartingMap.set(processId, false);
-
-    this.startCommand({
-      id: procInfo.id,
-      name: procInfo.name,
-      command: procInfo.command,
-      restart: procInfo.restart
-    });
-
-    // Emit restart state change after restart completes
-    this.emitRestartStateChange(processId);
   }
 
-  private scheduleRestart(processId: number, delay: number, exitCode?: number | null): void {
+  private scheduleRestart(processId: number, delay: number, exitCode: number | null | undefined, expectedRunId: number): void {
     // Clear any existing timeout for this process to prevent duplicate restarts
     const existingTimeout = this.restartTimeouts.get(processId);
     if (existingTimeout) {
@@ -511,7 +536,17 @@ export class ProcessManager extends EventEmitter {
     // Schedule restart via setTimeout (Requirement 1.7)
     const timeout = setTimeout(() => {
       this.restartTimeouts.delete(processId);
-      this.restart(processId, false); // false = automatic restart
+
+      const currentProcess = this.processes.get(processId);
+      if (!currentProcess || currentProcess.runId !== expectedRunId || currentProcess.status !== 'stopped') {
+        if (this.isRestartingMap.get(processId) && currentProcess?.runId === expectedRunId) {
+          this.isRestartingMap.set(processId, false);
+          this.emitRestartStateChange(processId);
+        }
+        return;
+      }
+
+      void this.restart(processId, false); // false = automatic restart
     }, delay);
 
     // Store the timeout in the map
