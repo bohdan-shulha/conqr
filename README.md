@@ -1,6 +1,6 @@
 # conqr
 
-Dead-simple TUI process runner for Node.js.
+Dead-simple TUI process runner, written in Go.
 
 ## Usage
 
@@ -10,7 +10,7 @@ Dead-simple TUI process runner for Node.js.
 conqr 'npm run dev' 'npm run build:emails' 'npm run worker'
 ```
 
-You can customize process names using the `'name'='command'` syntax:
+Customize process names with the `'name'='command'` syntax:
 
 ```bash
 conqr 'Dev Server'='npm run dev' 'Build Process'='npm run build' 'Worker'='npm run worker'
@@ -18,9 +18,10 @@ conqr 'Dev Server'='npm run dev' 'Build Process'='npm run build' 'Worker'='npm r
 
 ### Configuration File
 
-Create a `conqr.json` or `.conqr.json` file in your project directory:
+Create a `conqr.json` or `.conqr.json` file in your project directory.
 
-**Simple commands (string values):**
+Simple commands:
+
 ```json
 {
   "commands": {
@@ -31,7 +32,8 @@ Create a `conqr.json` or `.conqr.json` file in your project directory:
 }
 ```
 
-**Extended commands (with restart options):**
+Extended commands with restart options:
+
 ```json
 {
   "commands": {
@@ -53,36 +55,24 @@ Create a `conqr.json` or `.conqr.json` file in your project directory:
 }
 ```
 
-**Mixed simple and extended:**
-```json
-{
-  "commands": {
-    "Dev Server": "npm run dev",
-    "Worker": {
-      "command": "npm run worker",
-      "restart": { "policy": "on-error" }
-    }
-  }
-}
-```
+Then run:
 
-Then simply run:
 ```bash
 conqr
 ```
 
-CLI arguments take precedence over the config file if both are provided.
+CLI arguments take precedence over config files.
 
 ### Restart Configuration
 
-Configure automatic restart behavior for processes that crash or exit.
+Restart policies:
 
-**Restart policies:**
-- `"never"` - No automatic restart (default)
-- `"on-error"` - Restart only when process exits with non-zero code
-- `"on-exit"` - Restart whenever process exits, regardless of exit code
+- `"never"`: no automatic restart
+- `"on-error"`: restart only when a process exits with a non-zero code
+- `"on-exit"`: restart whenever a process exits
 
-**Global restart (applies to all commands):**
+Global restart settings apply to all config-file commands:
+
 ```json
 {
   "restart": {
@@ -96,7 +86,8 @@ Configure automatic restart behavior for processes that crash or exit.
 }
 ```
 
-**Per-process restart (overrides global):**
+Per-process restart settings override global settings:
+
 ```json
 {
   "restart": {
@@ -118,7 +109,7 @@ Configure automatic restart behavior for processes that crash or exit.
 
 ### JSON Schema
 
-For IDE autocomplete and validation, add a `$schema` reference to your config file:
+For IDE autocomplete and validation, add a `$schema` reference:
 
 ```json
 {
@@ -130,76 +121,70 @@ For IDE autocomplete and validation, add a `$schema` reference to your config fi
 }
 ```
 
-The schema file is also available in the npm package at `node_modules/conqr/conqr.schema.json` for local reference.
-
 ## Demo
 
 Try it with the included demo scripts:
 
 ```bash
-npm start 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
+go run . 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
 ```
 
 ## Features
 
 - Run multiple commands concurrently
-- Two-pane interface:
-  - **Sidebar**: "All processes" menu item and list of commands with status indicators (UP = running, ERROR = error detected, DOWN = stopped)
-  - **Main pane**: Logs from selected command or unified view when "All processes" is selected
+- Two-pane terminal interface with process statuses and logs
+- Unified "All processes" log view
 - ANSI color support in logs
-- Automatic error detection based on log patterns and ANSI color codes
-- Auto-scroll to bottom when new logs arrive (can be disabled by scrolling up)
-- Mouse wheel scrolling support
-- Raw mode for full-screen log viewing (press `r` to toggle)
-- Automatic process restart with configurable policies (`never`, `on-error`, `on-exit`)
-- Keyboard controls:
-  - **Arrow Left/Right**: Switch focus between sidebar and main pane
-  - **Arrow Up/Down**:
-    - In sidebar: Navigate between commands (including "All processes" menu item)
-    - In main pane: Scroll logs line by line
-  - **PageUp/PageDown**: Scroll logs 10 lines at a time (main pane)
-  - **Home**: Jump to top of logs (main pane)
-  - **End**: Jump to bottom of logs (main pane)
-  - **r**: Restart selected process (sidebar)
-  - **l**: Toggle raw mode (full-screen log view)
-  - **q** or **Ctrl+C**: Quit application
+- Automatic error detection from common error patterns and red ANSI output
+- Auto-scroll to bottom while new logs arrive
+- Mouse wheel and keyboard scrolling
+- Raw log mode with `l`
+- Manual process restart with `r`
+- Automatic process restart with configurable policies
+- Graceful process-group shutdown on quit
+
+## Keyboard Controls
+
+- Arrow Left/Right: switch focus between sidebar and logs
+- Arrow Up/Down: navigate commands or scroll logs
+- PageUp/PageDown: scroll logs 10 lines
+- Home/End: jump to top or bottom
+- `r`: restart selected process
+- `l`: toggle raw log mode
+- `q` or Ctrl+C: quit
 
 ## Requirements
 
-- Node.js >= 18.0.0
+- For npm installs: Node.js 18 or newer
+- For source builds: Go 1.25 or newer
+- Prebuilt npm binaries are published for macOS, Linux, and Windows on `amd64` and `arm64`
 
 ## Installation
 
-Install globally:
+Install from npm:
+
 ```bash
 npm install -g conqr
 ```
 
-Or install locally in your project:
+The npm package preserves the existing `conqr` command and launches the bundled Go binary for your platform.
+
+Install from source:
+
 ```bash
-npm install conqr
+go install github.com/bohdan-shulha/conqr@latest
 ```
 
-## Build
+Or build locally:
 
 ```bash
-npm run build
+make build
+./bin/conqr 'command1' 'command2' 'command3'
 ```
 
 ## Development
 
-Run in development mode (using tsx):
 ```bash
-npm start 'command1' 'command2' 'command3'
-```
-
-Or after building:
-```bash
-npm run build
-node dist/index.js 'command1' 'command2' 'command3'
-```
-
-Or after installing globally:
-```bash
-conqr 'command1' 'command2' 'command3'
+make test
+go run . 'command1' 'command2' 'command3'
 ```
