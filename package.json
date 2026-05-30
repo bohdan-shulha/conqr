@@ -4,7 +4,7 @@
   "description": "Dead-simple TUI process runner",
   "type": "module",
   "bin": {
-    "conqr": "./npm/conqr.js"
+    "conqr": "npm/conqr.js"
   },
   "files": [
     "dist/conqr-*",
@@ -30,7 +30,7 @@
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bohdan-shulha/conqr.git"
+    "url": "git+https://github.com/bohdan-shulha/conqr.git"
   },
   "homepage": "https://github.com/bohdan-shulha/conqr#readme",
   "engines": {

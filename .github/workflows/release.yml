@@ -81,7 +81,7 @@ jobs:
           echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Update package version
-        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - name: Generate changelog
         id: changelog
@@ -89,41 +89,51 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           PREVIOUS_TAG="${{ steps.version.outputs.previous_tag }}"
-          RANGE=""
-          if [ -n "$PREVIOUS_TAG" ]; then
-            RANGE="$PREVIOUS_TAG..HEAD"
-          fi
 
-          {
-            echo "## [$VERSION] - $(date -u +%Y-%m-%d)"
-            echo
-            if [ -n "$RANGE" ]; then
-              git log "$RANGE" --pretty=format:"- %s" --no-merges
-            else
-              git log --pretty=format:"- %s" --no-merges
-            fi
-          } > /tmp/conqr-release-notes.md
-
-          if [ "$(wc -l < /tmp/conqr-release-notes.md)" -le 2 ]; then
-            echo "- Maintenance release." >> /tmp/conqr-release-notes.md
-          fi
-          echo >> /tmp/conqr-release-notes.md
-
-          if [ -f CHANGELOG.md ]; then
-            {
-              head -n 1 CHANGELOG.md
-              echo
-              cat /tmp/conqr-release-notes.md
-              tail -n +2 CHANGELOG.md
-            } > /tmp/CHANGELOG.md
+          if [ -f CHANGELOG.md ] && grep -q "^## \\[$VERSION\\]" CHANGELOG.md; then
+            awk -v version="$VERSION" '
+              $0 ~ "^## \\[" version "\\]" { capture=1 }
+              capture && /^## \[/ && $0 !~ "^## \\[" version "\\]" { exit }
+              capture { print }
+            ' CHANGELOG.md > /tmp/conqr-release-notes.md
+            echo >> /tmp/conqr-release-notes.md
           else
+            RANGE=""
+            if [ -n "$PREVIOUS_TAG" ]; then
+              RANGE="$PREVIOUS_TAG..HEAD"
+            fi
+
             {
-              echo "# Changelog"
+              echo "## [$VERSION] - $(date -u +%Y-%m-%d)"
               echo
-              cat /tmp/conqr-release-notes.md
-            } > /tmp/CHANGELOG.md
+              if [ -n "$RANGE" ]; then
+                git log "$RANGE" --pretty=format:"- %s" --no-merges
+              else
+                git log --pretty=format:"- %s" --no-merges
+              fi
+            } > /tmp/conqr-release-notes.md
+
+            if [ "$(wc -l < /tmp/conqr-release-notes.md)" -le 2 ]; then
+              echo "- Maintenance release." >> /tmp/conqr-release-notes.md
+            fi
+            echo >> /tmp/conqr-release-notes.md
+
+            if [ -f CHANGELOG.md ]; then
+              {
+                head -n 1 CHANGELOG.md
+                echo
+                cat /tmp/conqr-release-notes.md
+                tail -n +2 CHANGELOG.md
+              } > /tmp/CHANGELOG.md
+            else
+              {
+                echo "# Changelog"
+                echo
+                cat /tmp/conqr-release-notes.md
+              } > /tmp/CHANGELOG.md
+            fi
+            mv /tmp/CHANGELOG.md CHANGELOG.md
           fi
-          mv /tmp/CHANGELOG.md CHANGELOG.md
 
           {
             echo "notes<<EOF"
@@ -154,6 +164,20 @@ jobs:
       - name: Pack npm package
         run: npm pack
 
+      - name: Verify npm publish access
+        shell: bash
+        run: |
+          if npm view "conqr@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+            echo "conqr@${{ steps.version.outputs.version }} is already published; npm publish will be skipped."
+            exit 0
+          fi
+
+          NPM_USER=$(npm whoami)
+          echo "Authenticated to npm as $NPM_USER"
+          npm owner ls conqr | grep -E "^${NPM_USER} " >/dev/null
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
@@ -162,21 +186,32 @@ jobs:
       - name: Commit version and changelog
         run: |
           git add package.json package-lock.json CHANGELOG.md
-          git commit -m "chore: release v${{ steps.version.outputs.version }}"
+          git diff --cached --quiet || git commit -m "chore: release v${{ steps.version.outputs.version }}"
 
       - name: Create release tag
-        run: git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.version.outputs.tag }} already exists locally."
+          else
+            git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          fi
+
+      - name: Publish to npm
+        shell: bash
+        run: |
+          if npm view "conqr@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+            echo "conqr@${{ steps.version.outputs.version }} is already published; skipping npm publish."
+          else
+            npm publish --provenance
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Push changes and tag
         run: |
           BRANCH=$(git rev-parse --abbrev-ref HEAD)
           git push origin "$BRANCH"
           git push origin "${{ steps.version.outputs.tag }}"
-
-      - name: Publish to npm
-        run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
