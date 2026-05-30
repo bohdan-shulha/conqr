@@ -13,7 +13,7 @@ on:
           - major
           - custom
       custom_version:
-        description: 'Custom version (e.g., 1.2.3) - only used if version_type is "custom"'
+        description: 'Custom version (e.g., 1.2.3) - only used when version_type is custom'
         required: false
         type: string
 
@@ -30,29 +30,32 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Update npm
-        run: npm install -g npm@latest
+      - name: Install npm metadata
+        run: npm ci --ignore-scripts
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Test
+        run: go test ./...
 
       - name: Determine version
         id: version
+        shell: bash
         run: |
-          if [ "${{ inputs.version_type }}" == "custom" ]; then
+          if [ "${{ inputs.version_type }}" = "custom" ]; then
             NEW_VERSION="${{ inputs.custom_version }}"
           else
             CURRENT_VERSION=$(node -p "require('./package.json').version")
-            IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
-            MAJOR=${VERSION_PARTS[0]}
-            MINOR=${VERSION_PARTS[1]}
-            PATCH=${VERSION_PARTS[2]}
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
             case "${{ inputs.version_type }}" in
               patch)
@@ -72,110 +75,115 @@ jobs:
             NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           fi
 
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "New version: $NEW_VERSION"
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Update package.json version
+      - name: Update package version
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version
+
+      - name: Generate changelog
+        id: changelog
+        shell: bash
         run: |
-          npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+          VERSION="${{ steps.version.outputs.version }}"
+          PREVIOUS_TAG="${{ steps.version.outputs.previous_tag }}"
+          RANGE=""
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RANGE="$PREVIOUS_TAG..HEAD"
+          fi
 
-      - name: Build
-        run: npm run build
+          {
+            echo "## [$VERSION] - $(date -u +%Y-%m-%d)"
+            echo
+            if [ -n "$RANGE" ]; then
+              git log "$RANGE" --pretty=format:"- %s" --no-merges
+            else
+              git log --pretty=format:"- %s" --no-merges
+            fi
+          } > /tmp/conqr-release-notes.md
+
+          if [ "$(wc -l < /tmp/conqr-release-notes.md)" -le 2 ]; then
+            echo "- Maintenance release." >> /tmp/conqr-release-notes.md
+          fi
+          echo >> /tmp/conqr-release-notes.md
+
+          if [ -f CHANGELOG.md ]; then
+            {
+              head -n 1 CHANGELOG.md
+              echo
+              cat /tmp/conqr-release-notes.md
+              tail -n +2 CHANGELOG.md
+            } > /tmp/CHANGELOG.md
+          else
+            {
+              echo "# Changelog"
+              echo
+              cat /tmp/conqr-release-notes.md
+            } > /tmp/CHANGELOG.md
+          fi
+          mv /tmp/CHANGELOG.md CHANGELOG.md
+
+          {
+            echo "notes<<EOF"
+            cat /tmp/conqr-release-notes.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          mkdir -p dist release
+          for target in darwin/amd64/darwin darwin/arm64/darwin linux/amd64/linux linux/arm64/linux windows/amd64/win32 windows/arm64/win32; do
+            IFS='/' read -r GOOS GOARCH NPM_PLATFORM <<< "$target"
+            EXT=""
+            if [ "$GOOS" = "windows" ]; then
+              EXT=".exe"
+            fi
+            RAW="conqr-${NPM_PLATFORM}-${GOARCH}${EXT}"
+            ARCHIVE="conqr-${GOOS}-${GOARCH}"
+            GOOS="$GOOS" GOARCH="$GOARCH" go build -ldflags="-s -w" -o "dist/$RAW" .
+            if [ "$GOOS" = "windows" ]; then
+              (cd dist && zip "../release/$ARCHIVE.zip" "$RAW")
+            else
+              tar -czf "release/$ARCHIVE.tar.gz" -C dist "$RAW"
+            fi
+          done
+
+      - name: Pack npm package
+        run: npm pack
 
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Get previous tag
-        id: previous_tag
+      - name: Commit version and changelog
         run: |
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          echo "tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
-
-      - name: Commit version bump
-        run: |
-          git add package.json package-lock.json
-          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
-
-      - name: Get branch name
-        id: branch
-        run: |
-          BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "chore: release v${{ steps.version.outputs.version }}"
 
       - name: Create release tag
-        run: |
-          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
-
-      - name: Generate changelog
-        id: changelog
-        uses: requarks/changelog-action@v1
-        continue-on-error: true
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fromTag: ${{ steps.previous_tag.outputs.tag }}
-          toTag: v${{ steps.version.outputs.version }}
-          writeToFile: true
-          changelogFilePath: CHANGELOG.md
-
-      - name: Generate release notes
-        id: release_notes
-        run: |
-          if [ -f CHANGELOG.md ]; then
-            RELEASE_NOTES=$(awk '/^## \[${{ steps.version.outputs.version }}\]/,/^## \[/{if (!/^## \[${{ steps.version.outputs.version }}\]/) exit; if (/^## \[${{ steps.version.outputs.version }}\]/) next} /^## \[${{ steps.version.outputs.version }}\]/,/^## \[/{print}' CHANGELOG.md | sed '/^## \[/d' | head -n -1)
-            if [ -z "$RELEASE_NOTES" ] || [ "$RELEASE_NOTES" = "" ]; then
-              if [ -n "${{ steps.previous_tag.outputs.tag }}" ]; then
-                RELEASE_NOTES=$(git log ${{ steps.previous_tag.outputs.tag }}..HEAD --pretty=format:"- %s" | head -20)
-              else
-                RELEASE_NOTES=$(git log --pretty=format:"- %s" | head -20)
-              fi
-            fi
-          else
-            if [ -n "${{ steps.previous_tag.outputs.tag }}" ]; then
-              RELEASE_NOTES=$(git log ${{ steps.previous_tag.outputs.tag }}..HEAD --pretty=format:"- %s" | head -20)
-            else
-              RELEASE_NOTES=$(git log --pretty=format:"- %s" | head -20)
-            fi
-          fi
-          if [ -z "$RELEASE_NOTES" ] || [ "$RELEASE_NOTES" = "" ]; then
-            RELEASE_NOTES="See [CHANGELOG.md](https://github.com/bohdan-shulha/conqr/blob/main/CHANGELOG.md) for details."
-          fi
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Commit changelog
-        run: |
-          if [ -f CHANGELOG.md ]; then
-            git add CHANGELOG.md
-            git commit -m "docs: update changelog for v${{ steps.version.outputs.version }}" || exit 0
-            git tag -d "v${{ steps.version.outputs.version }}" || true
-            git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
-          fi
+        run: git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
 
       - name: Push changes and tag
         run: |
-          git push origin ${{ steps.branch.outputs.branch }}
-          git push origin "v${{ steps.version.outputs.version }}" --force
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          git push origin "$BRANCH"
+          git push origin "${{ steps.version.outputs.tag }}"
 
       - name: Publish to npm
-        run: npm publish
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Release v${{ steps.version.outputs.version }}
-          body: |
-            ## Changes
-
-            ${{ steps.release_notes.outputs.notes }}
-
-            ## Installation
-
-            ```bash
-            npm install -g conqr
-            ```
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body: ${{ steps.changelog.outputs.notes }}
+          files: release/*
           draft: false
           prerelease: false

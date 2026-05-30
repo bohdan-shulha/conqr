@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/bohdan-shulha/conqr/main/conqr.schema.json",
-  "commands": [
-    "npm run dev",
-    "npm run build",
-    "npm run worker"
-  ]
+  "commands": {
+    "Dev Server": "npm run dev",
+    "Build": "npm run build",
+    "Worker": "npm run worker"
+  }
 }

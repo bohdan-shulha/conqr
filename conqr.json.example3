@@ -1,17 +1,18 @@
 {
   "$schema": "https://raw.githubusercontent.com/bohdan-shulha/conqr/main/conqr.schema.json",
-  "commands": [
-    {
-      "name": "Dev Server",
-      "command": "npm run dev"
-    },
-    {
-      "name": "Build Process",
-      "command": "npm run build"
-    },
-    {
-      "name": "Worker",
-      "command": "npm run worker"
+  "restart": {
+    "policy": "on-error",
+    "delay": 2000
+  },
+  "commands": {
+    "Dev Server": "npm run dev",
+    "Build Process": "npm run build",
+    "Worker": {
+      "command": "npm run worker",
+      "restart": {
+        "policy": "on-exit",
+        "delay": 5000
+      }
     }
-  ]
+  }
 }
