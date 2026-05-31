@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,42 @@ func TestTUINewLogsBelowIndicator(t *testing.T) {
 	tui = model.(TUI)
 	if tui.newLogsBelow {
 		t.Fatal("expected new logs indicator to clear at bottom")
+	}
+}
+
+func TestTUIToggleRawModePreservesScrolledPosition(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	commands := []CommandInfo{{ID: 0, Name: "one", Command: "echo one"}}
+	for i := 0; i < 40; i++ {
+		logBuffer.Add(0, fmt.Sprintf("line %02d", i), SourceStdout, false)
+	}
+
+	tui := TUI{
+		commands:       commands,
+		processManager: manager,
+		logBuffer:      logBuffer,
+		viewport:       viewport.New(viewport.WithWidth(20), viewport.WithHeight(5)),
+		width:          80,
+		height:         24,
+		focusedPane:    focusMain,
+	}
+	tui.refreshViewport(true)
+	tui.viewport.SetYOffset(7)
+	offset := tui.viewport.YOffset()
+	topLine := strings.TrimRight(strings.Split(tui.viewport.View(), "\n")[0], " ")
+
+	model, _ := tui.handleKey(keyPress("l"))
+	tui = model.(TUI)
+
+	if !tui.rawMode {
+		t.Fatal("expected raw mode to be enabled")
+	}
+	if got := tui.viewport.YOffset(); got != offset {
+		t.Fatalf("expected raw mode toggle to keep offset %d, got %d", offset, got)
+	}
+	if got := strings.TrimRight(strings.Split(tui.viewport.View(), "\n")[0], " "); got != topLine {
+		t.Fatalf("expected top visible log row %q, got %q", topLine, got)
 	}
 }
 

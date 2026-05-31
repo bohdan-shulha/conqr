@@ -142,9 +142,7 @@ func (t TUI) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		t.processManager.KillAllForExit(250 * time.Millisecond)
 		return t, tea.Quit
 	case "l":
-		t.rawMode = !t.rawMode
-		t.newLogsBelow = false
-		t.refreshViewport(true)
+		t.toggleRawMode()
 	case "left":
 		if !t.rawMode && t.focusedPane == focusMain {
 			t.focusedPane = focusSidebar
@@ -193,6 +191,18 @@ func (t TUI) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return t, nil
+}
+
+func (t *TUI) toggleRawMode() {
+	wasAtBottom := t.viewport.AtBottom()
+	yOffset := t.viewport.YOffset()
+
+	t.rawMode = !t.rawMode
+	t.refreshViewport(wasAtBottom)
+	if !wasAtBottom {
+		t.viewport.SetYOffset(yOffset)
+		t.syncNewLogIndicator()
+	}
 }
 
 func (t *TUI) handleMouseWheel(msg tea.MouseWheelMsg) {
