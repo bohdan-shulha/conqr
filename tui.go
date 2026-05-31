@@ -276,8 +276,12 @@ func (t TUI) View() tea.View {
 	var content string
 	if t.rawMode {
 		content = t.viewport.View()
-		if t.newLogsBelow {
-			content = lipgloss.JoinVertical(lipgloss.Left, content, moreLogsLine(t.width))
+		if t.height > 1 {
+			footer := lipgloss.NewStyle().Width(t.width).Render("")
+			if t.newLogsBelow {
+				footer = moreLogsLine(t.width)
+			}
+			content = lipgloss.JoinVertical(lipgloss.Left, content, footer)
 		}
 	} else {
 		content = t.fullView()
@@ -329,19 +333,20 @@ func (t TUI) mainView(height int) string {
 
 	restarts, crashes := t.visibleCounts()
 	indicator := ""
-	if restarts > 0 || crashes > 0 {
-		indicator = fmt.Sprintf("↻ %d × %d ", restarts, crashes)
+	if t.newLogsBelow {
+		indicator += "▼ More logs below "
 	}
-	titleWidth := max(0, width-lipgloss.Width(indicator))
+	if restarts > 0 || crashes > 0 {
+		indicator += fmt.Sprintf("↻ %d × %d ", restarts, crashes)
+	}
+	indicatorWidth := min(width, lipgloss.Width(indicator))
+	titleWidth := max(0, width-indicatorWidth)
 	header := headerStyle.Width(titleWidth).Render(truncateDisplay(prefix+title, titleWidth))
 	if indicator != "" {
-		header += headerStyle.Width(lipgloss.Width(indicator)).Render(indicator)
+		header += headerStyle.Width(indicatorWidth).Render(truncateDisplay(indicator, indicatorWidth))
 	}
 
 	lines := []string{header, t.viewport.View()}
-	if t.newLogsBelow {
-		lines = append(lines, moreLogsLine(width))
-	}
 	main := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return lipgloss.NewStyle().Width(width).Height(height).Render(main)
 }
@@ -504,14 +509,14 @@ func (t TUI) sidebarWidth() int {
 }
 
 func (t TUI) logAreaSize() (int, int) {
-	indicatorHeight := 0
-	if t.newLogsBelow {
-		indicatorHeight = 1
-	}
 	if t.rawMode {
-		return max(1, t.width), max(1, t.height-indicatorHeight)
+		footerHeight := 0
+		if t.height > 1 {
+			footerHeight = 1
+		}
+		return max(1, t.width), max(1, t.height-footerHeight)
 	}
-	return max(1, t.width-t.sidebarWidth()-1), max(1, t.height-2-indicatorHeight)
+	return max(1, t.width-t.sidebarWidth()-1), max(1, t.height-2)
 }
 
 func separatorColumn(height int) string {

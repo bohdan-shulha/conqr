@@ -120,11 +120,19 @@ func TestTUINewLogsBelowIndicator(t *testing.T) {
 
 	model, _ := tui.handleKey(keyPress("home"))
 	tui = model.(TUI)
+	offset := tui.viewport.YOffset()
+	visible := tui.viewport.View()
 	logBuffer.Add(0, "new line", SourceStdout, false)
 	tui.refreshViewport(false)
 
 	if !tui.newLogsBelow {
 		t.Fatal("expected new logs below indicator when logs arrive while scrolled up")
+	}
+	if got := tui.viewport.YOffset(); got != offset {
+		t.Fatalf("expected viewport offset to stay at %d, got %d", offset, got)
+	}
+	if got := tui.viewport.View(); got != visible {
+		t.Fatal("expected visible log viewport to stay unchanged when logs append below")
 	}
 	if !strings.Contains(tui.mainView(23), "More logs below") {
 		t.Fatal("expected main view to render more logs indicator")
