@@ -38,6 +38,8 @@ type ProcessManager struct {
 	crashCounts             map[int]int
 	isRestarting            map[int]bool
 	restartInFlight         map[int]bool
+	stopInFlight            map[int]bool
+	manuallyStopped         map[int]bool
 	intentionalExitCommands map[*exec.Cmd]bool
 }
 
@@ -50,6 +52,8 @@ func NewProcessManager(logBuffer *LogBuffer) *ProcessManager {
 		crashCounts:             make(map[int]int),
 		isRestarting:            make(map[int]bool),
 		restartInFlight:         make(map[int]bool),
+		stopInFlight:            make(map[int]bool),
+		manuallyStopped:         make(map[int]bool),
 		intentionalExitCommands: make(map[*exec.Cmd]bool),
 	}
 }
@@ -173,10 +177,11 @@ func (pm *ProcessManager) waitForExit(processID int, cmd *exec.Cmd, runID int) {
 	}
 	restartConfig := info.Restart
 	shuttingDown := pm.shuttingDown
+	manuallyStopped := pm.manuallyStopped[processID]
 	pm.mu.Unlock()
 
 	willRestart := false
-	if restartConfig != nil && !wasIntentional && !shuttingDown {
+	if restartConfig != nil && !wasIntentional && !shuttingDown && !manuallyStopped {
 		if restartConfig.Policy == RestartOnExit || (restartConfig.Policy == RestartOnError && hasNonZeroExitCode) {
 			pm.scheduleRestart(processID, restartConfig.Delay, code, runID)
 			willRestart = true
@@ -302,6 +307,7 @@ func (pm *ProcessManager) beginShutdown() []*processInfo {
 	for id := range pm.isRestarting {
 		pm.isRestarting[id] = false
 	}
+	pm.manuallyStopped = make(map[int]bool)
 	infos := make([]*processInfo, 0, len(pm.processes))
 	for _, info := range pm.processes {
 		infos = append(infos, info)
@@ -320,6 +326,57 @@ func allExited(infos []*processInfo) bool {
 	return true
 }
 
+func (pm *ProcessManager) IsManuallyStopped(processID int) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.manuallyStopped[processID]
+}
+
+func (pm *ProcessManager) Stop(processID int, manual bool) {
+	pm.mu.Lock()
+	if pm.shuttingDown {
+		pm.mu.Unlock()
+		return
+	}
+	if pm.stopInFlight[processID] {
+		pm.mu.Unlock()
+		return
+	}
+	pm.stopInFlight[processID] = true
+
+	if timer := pm.restartTimers[processID]; timer != nil {
+		timer.Stop()
+		delete(pm.restartTimers, processID)
+	}
+	pm.isRestarting[processID] = false
+	pm.manuallyStopped[processID] = true
+
+	info := pm.processes[processID]
+	if info == nil {
+		delete(pm.stopInFlight, processID)
+		pm.mu.Unlock()
+		return
+	}
+	live := isLive(info.Cmd)
+	pm.mu.Unlock()
+
+	if manual {
+		message := "› Stop initiated"
+		if live {
+			message = "› Stop initiated, SIGTERM signal sent"
+		}
+		pm.logBuffer.Add(processID, message, SourceStdout, true)
+	}
+
+	if live {
+		pm.killOne(info)
+	}
+
+	pm.mu.Lock()
+	delete(pm.stopInFlight, processID)
+	pm.mu.Unlock()
+}
+
 func (pm *ProcessManager) Restart(processID int, manual bool) {
 	pm.mu.Lock()
 	if pm.shuttingDown {
@@ -331,6 +388,7 @@ func (pm *ProcessManager) Restart(processID int, manual bool) {
 		return
 	}
 	pm.restartInFlight[processID] = true
+	delete(pm.manuallyStopped, processID)
 
 	if timer := pm.restartTimers[processID]; timer != nil {
 		timer.Stop()
@@ -386,7 +444,7 @@ func (pm *ProcessManager) Restart(processID int, manual bool) {
 
 func (pm *ProcessManager) scheduleRestart(processID int, delay int, code *int, expectedRunID int) {
 	pm.mu.Lock()
-	if pm.shuttingDown {
+	if pm.shuttingDown || pm.manuallyStopped[processID] {
 		pm.mu.Unlock()
 		return
 	}

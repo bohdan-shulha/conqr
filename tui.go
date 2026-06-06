@@ -26,6 +26,7 @@ const (
 
 type tickMsg time.Time
 type restartCompleteMsg struct{}
+type stopCompleteMsg struct{}
 
 type TUI struct {
 	commands         []CommandInfo
@@ -120,7 +121,7 @@ func (t TUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		t.refreshViewport(false)
 		return t, tick()
-	case restartCompleteMsg:
+	case restartCompleteMsg, stopCompleteMsg:
 		return t, nil
 	case tea.KeyPressMsg:
 		return t.handleKey(msg)
@@ -189,6 +190,10 @@ func (t TUI) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if !t.rawMode && t.focusedPane == focusSidebar && t.selectedIndex != allProcessesIndex {
 			return t, restartCmd(t.processManager, t.commands[t.selectedIndex].ID)
 		}
+	case "s":
+		if !t.rawMode && t.focusedPane == focusSidebar && t.selectedIndex != allProcessesIndex {
+			return t, stopCmd(t.processManager, t.commands[t.selectedIndex].ID)
+		}
 	}
 	return t, nil
 }
@@ -230,6 +235,13 @@ func restartCmd(processManager *ProcessManager, processID int) tea.Cmd {
 	return func() tea.Msg {
 		processManager.Restart(processID, true)
 		return restartCompleteMsg{}
+	}
+}
+
+func stopCmd(processManager *ProcessManager, processID int) tea.Cmd {
+	return func() tea.Msg {
+		processManager.Stop(processID, true)
+		return stopCompleteMsg{}
 	}
 }
 
@@ -318,7 +330,7 @@ func (t TUI) fullView() string {
 	main := t.mainView(contentHeight)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, separatorColumn(contentHeight), main)
 
-	helpText := "←→: switch | r: restart | l: logs | q: quit"
+	helpText := "←→: switch | s: stop | r: restart | l: logs | q: quit"
 	if t.focusedPane == focusMain {
 		helpText = "←→: switch | ↑↓: scroll | PageUp/Down: 10 lines | Home/End: top/bottom | l: logs | q: quit"
 	}
@@ -386,14 +398,16 @@ func (t TUI) sidebarLines(width, height int) []string {
 		state := t.processManager.RestartState(command.ID)
 		statusText := "DOWN"
 		statusColor := "#ff0000"
-		if status == StatusRunning {
+		if t.processManager.IsManuallyStopped(command.ID) {
+			statusText = "STOP"
+			statusColor = "#888888"
+		} else if status == StatusRunning {
 			statusText = "UP"
 			statusColor = "#00ff00"
 		} else if status == StatusError {
 			statusText = "ERROR"
 			statusColor = "#ffaa00"
-		}
-		if state.IsRestarting && status != StatusRunning {
+		} else if state.IsRestarting && status != StatusRunning {
 			statusText = "› DOWN"
 		}
 		lines = append(lines, statusRow(command.Name, statusText, width, index == t.selectedIndex, statusColor))

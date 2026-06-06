@@ -139,6 +139,7 @@ go run . 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
 - Auto-scroll to bottom while new logs arrive
 - Mouse wheel and keyboard scrolling
 - Raw log mode with `l`
+- Manual process stop with `s`
 - Manual process restart with `r`
 - Automatic process restart with configurable policies
 - Graceful process-group shutdown on quit
@@ -149,6 +150,7 @@ go run . 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
 - Arrow Up/Down: navigate commands or scroll logs
 - PageUp/PageDown: scroll logs 10 lines
 - Home/End: jump to top or bottom
+- `s`: stop selected process
 - `r`: restart selected process
 - `l`: toggle raw log mode
 - `q` or Ctrl+C: quit

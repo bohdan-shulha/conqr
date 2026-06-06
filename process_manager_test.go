@@ -170,6 +170,99 @@ func TestKillAllForExitReturnsQuicklyForTermIgnoringProcess(t *testing.T) {
 	}
 }
 
+func TestStopKillsRunningProcess(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "long",
+		Command: "sleep 10",
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusRunning }, time.Second)
+
+	manager.Stop(1, true)
+
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusStopped }, 2*time.Second)
+
+	if !manager.IsManuallyStopped(1) {
+		t.Fatal("expected process to be manually stopped")
+	}
+	if got := countStartLogs(logBuffer, 1); got != 1 {
+		t.Fatalf("expected 1 start log, got %d", got)
+	}
+}
+
+func TestStopCancelsPendingRestart(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "restartable",
+		Command: shellSleepCommand(50*time.Millisecond, 0),
+		Restart: &RestartConfig{
+			Policy: RestartOnExit,
+			Delay:  500,
+		},
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool {
+		state := manager.RestartState(1)
+		return manager.GetStatus(1) == StatusStopped && state.IsRestarting
+	}, 2*time.Second)
+
+	manager.Stop(1, true)
+	time.Sleep(700 * time.Millisecond)
+
+	if !manager.IsManuallyStopped(1) {
+		t.Fatal("expected process to be manually stopped")
+	}
+	if state := manager.RestartState(1); state.IsRestarting {
+		t.Fatalf("expected restarting state to clear, got %+v", state)
+	}
+	if got := countStartLogs(logBuffer, 1); got != 1 {
+		t.Fatalf("expected pending restart to be canceled, got %d starts", got)
+	}
+}
+
+func TestRestartClearsManualStop(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "long",
+		Command: "sleep 10",
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusRunning }, time.Second)
+
+	manager.Stop(1, true)
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusStopped }, 2*time.Second)
+
+	if !manager.IsManuallyStopped(1) {
+		t.Fatal("expected process to be manually stopped")
+	}
+
+	manager.Restart(1, true)
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusRunning }, 2*time.Second)
+
+	if manager.IsManuallyStopped(1) {
+		t.Fatal("expected manual stop flag to be cleared after restart")
+	}
+}
+
 func intPtr(value int) *int {
 	return &value
 }

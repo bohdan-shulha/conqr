@@ -59,6 +59,28 @@ func TestTUIKeyboardNavigationAndScroll(t *testing.T) {
 	}
 }
 
+func TestTUIStopRunsAsCommand(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	commands := []CommandInfo{{ID: 0, Name: "one", Command: "sleep 1"}}
+	tui := TUI{
+		commands:       commands,
+		processManager: manager,
+		logBuffer:      logBuffer,
+		viewport:       viewport.New(viewport.WithWidth(20), viewport.WithHeight(5)),
+		focusedPane:    focusSidebar,
+	}
+
+	model, cmd := tui.handleKey(keyPress("s"))
+	tui = model.(TUI)
+	if cmd == nil {
+		t.Fatal("expected stop to run as Bubble Tea command")
+	}
+	if tui.selectedIndex != 0 {
+		t.Fatalf("stop should not change selection, got %d", tui.selectedIndex)
+	}
+}
+
 func TestTUIRestartRunsAsCommand(t *testing.T) {
 	logBuffer := NewLogBuffer()
 	manager := NewProcessManager(logBuffer)
