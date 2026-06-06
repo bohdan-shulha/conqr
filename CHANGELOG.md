@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0] - 2026-06-06
+
+- chore: release v2.1.0
+- feat(tui): add manual process stop with s key
+- fix(tui): preserve scroll when toggling log-only
+- fix(tui): preserve log viewport while scrolled
+
 ## [2.1.0] - 2026-06-06
 
 - feat(tui): add manual process stop with s key

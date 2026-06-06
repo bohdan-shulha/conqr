@@ -1,6 +1,6 @@
 {
   "name": "conqr",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Dead-simple TUI process runner",
   "type": "module",
   "bin": {
