@@ -12,8 +12,9 @@ import (
 var configFiles = []string{".conqr.json", "conqr.json"}
 
 type rawConfigFile struct {
-	Commands json.RawMessage `json:"commands"`
-	Restart  *partialRestart `json:"restart"`
+	Commands     json.RawMessage `json:"commands"`
+	Restart      *partialRestart `json:"restart"`
+	DefaultGroup *string         `json:"defaultGroup"`
 }
 
 type partialRestart struct {
@@ -23,13 +24,14 @@ type partialRestart struct {
 
 type commandObject struct {
 	Command string          `json:"command"`
+	Group   *string         `json:"group"`
 	Restart *partialRestart `json:"restart"`
 }
 
-func loadConfig() ([]CommandInfo, error) {
+func loadConfig() ([]CommandInfo, string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	for _, name := range configFiles {
@@ -39,32 +41,40 @@ func loadConfig() ([]CommandInfo, error) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("error reading config file %s: %w", name, err)
+			return nil, "", fmt.Errorf("error reading config file %s: %w", name, err)
 		}
 
-		commands, err := parseConfig(content)
+		commands, defaultGroup, err := parseConfig(content)
 		if err != nil {
-			return nil, fmt.Errorf("error reading config file %s: %w", name, err)
+			return nil, "", fmt.Errorf("error reading config file %s: %w", name, err)
 		}
-		return commands, nil
+		return commands, defaultGroup, nil
 	}
 
-	return nil, nil
+	return nil, "", nil
 }
 
-func parseConfig(content []byte) ([]CommandInfo, error) {
+func parseConfig(content []byte) ([]CommandInfo, string, error) {
 	var config rawConfigFile
 	if err := json.Unmarshal(content, &config); err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	defaultGroup := ""
+	if config.DefaultGroup != nil {
+		defaultGroup = *config.DefaultGroup
 	}
 	if len(config.Commands) == 0 || string(config.Commands) == "null" {
-		return []CommandInfo{}, nil
+		return []CommandInfo{}, defaultGroup, nil
 	}
 	if len(config.Commands) > 0 && config.Commands[0] == '[' {
-		return nil, errors.New("array format for commands is no longer supported; use object format")
+		return nil, "", errors.New("array format for commands is no longer supported; use object format")
 	}
 
-	return parseConfigCommands(config.Commands, config.Restart)
+	commands, err := parseConfigCommands(config.Commands, config.Restart)
+	if err != nil {
+		return nil, "", err
+	}
+	return commands, defaultGroup, nil
 }
 
 func parseConfigCommands(commandsJSON json.RawMessage, global *partialRestart) ([]CommandInfo, error) {
@@ -121,10 +131,15 @@ func parseConfigCommands(commandsJSON json.RawMessage, global *partialRestart) (
 		}
 
 		restart := resolveRestartConfig(global, object.Restart)
+		group := ""
+		if object.Group != nil {
+			group = *object.Group
+		}
 		commands = append(commands, CommandInfo{
 			ID:      index,
 			Name:    name,
 			Command: object.Command,
+			Group:   group,
 			Restart: &restart,
 		})
 		index++

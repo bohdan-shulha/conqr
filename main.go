@@ -7,7 +7,7 @@ import (
 
 func main() {
 	cliCommands := parseCLICommands()
-	configCommands, err := loadConfig()
+	configCommands, defaultGroup, err := loadConfig()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -16,6 +16,7 @@ func main() {
 	var commands []CommandInfo
 	if len(cliCommands) > 0 {
 		commands = cliCommands
+		defaultGroup = ""
 	} else if len(configCommands) > 0 {
 		commands = configCommands
 	} else {
@@ -26,5 +27,5 @@ func main() {
 	logBuffer := NewLogBuffer()
 	processManager := NewProcessManager(logBuffer)
 
-	RenderTUI(commands, processManager, logBuffer)
+	RenderTUI(commands, defaultGroup, processManager, logBuffer)
 }

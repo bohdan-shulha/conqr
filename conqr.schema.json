@@ -27,6 +27,10 @@
       "type": "string",
       "description": "JSON Schema reference for IDE validation"
     },
+    "defaultGroup": {
+      "type": "string",
+      "description": "Sidebar group selected on startup. Must match a group name used by commands."
+    },
     "restart": {
       "$ref": "#/$defs/RestartConfig",
       "description": "Global restart configuration applied to all commands by default"
@@ -48,6 +52,10 @@
                 "command": {
                   "type": "string",
                   "description": "The command string to execute"
+                },
+                "group": {
+                  "type": "string",
+                  "description": "Optional group name for sidebar organization and merged log views"
                 },
                 "restart": {
                   "$ref": "#/$defs/RestartConfig",

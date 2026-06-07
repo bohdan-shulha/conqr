@@ -14,9 +14,12 @@ func TestParseConfigPreservesCommandOrderAndMergesRestart(t *testing.T) {
 		}
 	}`)
 
-	commands, err := parseConfig(content)
+	commands, defaultGroup, err := parseConfig(content)
 	if err != nil {
 		t.Fatalf("parseConfig returned error: %v", err)
+	}
+	if defaultGroup != "" {
+		t.Fatalf("expected empty defaultGroup, got %q", defaultGroup)
 	}
 	if len(commands) != 2 {
 		t.Fatalf("expected 2 commands, got %d", len(commands))
@@ -37,7 +40,31 @@ func TestParseConfigPreservesCommandOrderAndMergesRestart(t *testing.T) {
 
 func TestParseConfigRejectsArrayCommands(t *testing.T) {
 	content := []byte(`{ "commands": ["npm run dev"] }`)
-	if _, err := parseConfig(content); err == nil {
+	if _, _, err := parseConfig(content); err == nil {
 		t.Fatal("expected array commands to be rejected")
+	}
+}
+
+func TestParseConfigReadsGroupAndDefaultGroup(t *testing.T) {
+	content := []byte(`{
+		"defaultGroup": "services",
+		"commands": {
+			"api": { "command": "npm run api", "group": "services" },
+			"emails": { "command": "npm run build:emails", "group": "build" }
+		}
+	}`)
+
+	commands, defaultGroup, err := parseConfig(content)
+	if err != nil {
+		t.Fatalf("parseConfig returned error: %v", err)
+	}
+	if defaultGroup != "services" {
+		t.Fatalf("expected defaultGroup services, got %q", defaultGroup)
+	}
+	if commands[0].Group != "services" {
+		t.Fatalf("expected api group services, got %q", commands[0].Group)
+	}
+	if commands[1].Group != "build" {
+		t.Fatalf("expected emails group build, got %q", commands[1].Group)
 	}
 }

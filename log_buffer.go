@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"sync"
 	"time"
 )
@@ -64,6 +65,20 @@ func (l *LogBuffer) UnifiedLogs() []LogEntry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return append([]LogEntry(nil), l.unified...)
+}
+
+func (l *LogBuffer) LogsForProcessIDs(ids []int) []LogEntry {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	merged := make([]LogEntry, 0)
+	for _, id := range ids {
+		merged = append(merged, l.buffers[id]...)
+	}
+	slices.SortFunc(merged, func(a, b LogEntry) int {
+		return a.Timestamp.Compare(b.Timestamp)
+	})
+	return merged
 }
 
 func (l *LogBuffer) Clear(processID *int) {

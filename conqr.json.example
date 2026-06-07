@@ -1,8 +1,17 @@
 {
   "$schema": "https://raw.githubusercontent.com/bohdan-shulha/conqr/main/conqr.schema.json",
+  "defaultGroup": "services",
   "commands": {
-    "Dev Server": "npm run dev",
-    "Build": "npm run build",
-    "Worker": "npm run worker"
+    "api": { "command": "npm run api", "group": "services" },
+    "ssr": { "command": "npm run ssr", "group": "services" },
+    "Worker": {
+      "command": "npm run worker",
+      "group": "services",
+      "restart": {
+        "policy": "on-error",
+        "delay": 2000
+      }
+    },
+    "Build": { "command": "npm run build", "group": "build" }
   }
 }

@@ -35,14 +35,8 @@ func TestTUIKeyboardNavigationAndScroll(t *testing.T) {
 
 	model, _ := tui.handleKey(keyPress("down"))
 	tui = model.(TUI)
-	if tui.selectedIndex != 1 {
-		t.Fatalf("expected selected index 1, got %d", tui.selectedIndex)
-	}
-
-	model, _ = tui.handleKey(keyPress("down"))
-	tui = model.(TUI)
-	if tui.selectedIndex != allProcessesIndex {
-		t.Fatalf("expected all processes selection, got %d", tui.selectedIndex)
+	if tui.selectedSidebarIndex != 1 {
+		t.Fatalf("expected selected sidebar index 1, got %d", tui.selectedSidebarIndex)
 	}
 
 	model, _ = tui.handleKey(keyPress("right"))
@@ -64,11 +58,12 @@ func TestTUIStopRunsAsCommand(t *testing.T) {
 	manager := NewProcessManager(logBuffer)
 	commands := []CommandInfo{{ID: 0, Name: "one", Command: "sleep 1"}}
 	tui := TUI{
-		commands:       commands,
-		processManager: manager,
-		logBuffer:      logBuffer,
-		viewport:       viewport.New(viewport.WithWidth(20), viewport.WithHeight(5)),
-		focusedPane:    focusSidebar,
+		commands:             commands,
+		processManager:       manager,
+		logBuffer:            logBuffer,
+		viewport:             viewport.New(viewport.WithWidth(20), viewport.WithHeight(5)),
+		selectedSidebarIndex: 1,
+		focusedPane:          focusSidebar,
 	}
 
 	model, cmd := tui.handleKey(keyPress("s"))
@@ -76,8 +71,8 @@ func TestTUIStopRunsAsCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected stop to run as Bubble Tea command")
 	}
-	if tui.selectedIndex != 0 {
-		t.Fatalf("stop should not change selection, got %d", tui.selectedIndex)
+	if tui.selectedSidebarIndex != 1 {
+		t.Fatalf("stop should not change selection, got %d", tui.selectedSidebarIndex)
 	}
 }
 
@@ -86,11 +81,12 @@ func TestTUIRestartRunsAsCommand(t *testing.T) {
 	manager := NewProcessManager(logBuffer)
 	commands := []CommandInfo{{ID: 0, Name: "one", Command: "sleep 1"}}
 	tui := TUI{
-		commands:       commands,
-		processManager: manager,
-		logBuffer:      logBuffer,
-		viewport:       viewport.New(viewport.WithWidth(20), viewport.WithHeight(5)),
-		focusedPane:    focusSidebar,
+		commands:             commands,
+		processManager:       manager,
+		logBuffer:            logBuffer,
+		viewport:             viewport.New(viewport.WithWidth(20), viewport.WithHeight(5)),
+		selectedSidebarIndex: 1,
+		focusedPane:          focusSidebar,
 	}
 
 	model, cmd := tui.handleKey(keyPress("r"))
@@ -98,8 +94,8 @@ func TestTUIRestartRunsAsCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected restart to run as Bubble Tea command")
 	}
-	if tui.selectedIndex != 0 {
-		t.Fatalf("restart should not change selection, got %d", tui.selectedIndex)
+	if tui.selectedSidebarIndex != 1 {
+		t.Fatalf("restart should not change selection, got %d", tui.selectedSidebarIndex)
 	}
 }
 
@@ -225,6 +221,55 @@ func TestSystemLogLineRendersFullWidth(t *testing.T) {
 
 	if width := lipgloss.Width(line); width != 40 {
 		t.Fatalf("expected full-width system log line, got width %d", width)
+	}
+}
+
+func TestInitialSidebarSelectionUsesDefaultGroup(t *testing.T) {
+	commands := []CommandInfo{
+		{ID: 0, Name: "api", Command: "npm run api", Group: "services"},
+		{ID: 1, Name: "emails", Command: "npm run build:emails", Group: "build"},
+	}
+	items := buildSidebarItems(commands)
+	if got := initialSidebarSelection(items, "services"); got != 1 {
+		t.Fatalf("expected services group at index 1, got %d", got)
+	}
+	if got := initialSidebarSelection(items, "missing"); got != 0 {
+		t.Fatalf("expected fallback to all processes, got %d", got)
+	}
+}
+
+func TestTUIGroupSelectionShowsMergedLogs(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	commands := []CommandInfo{
+		{ID: 0, Name: "api", Command: "npm run api", Group: "services"},
+		{ID: 1, Name: "ssr", Command: "npm run ssr", Group: "services"},
+	}
+	logBuffer.Add(0, "api log", SourceStdout, false)
+	logBuffer.Add(1, "ssr log", SourceStdout, false)
+
+	items := buildSidebarItems(commands)
+	tui := TUI{
+		commands:             commands,
+		processManager:       manager,
+		logBuffer:            logBuffer,
+		viewport:             viewport.New(viewport.WithWidth(40), viewport.WithHeight(5)),
+		selectedSidebarIndex: 1,
+		width:                80,
+		height:               24,
+	}
+	if items[1].kind != itemGroup || items[1].group != "services" {
+		t.Fatalf("expected services group at index 1, got %+v", items[1])
+	}
+
+	logs := tui.currentLogs()
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 merged logs, got %d", len(logs))
+	}
+
+	lines := tui.logLines()
+	if !strings.Contains(lines[0], "[api]") || !strings.Contains(lines[1], "[ssr]") {
+		t.Fatalf("expected prefixed group logs, got %q and %q", lines[0], lines[1])
 	}
 }
 

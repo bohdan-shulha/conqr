@@ -12,10 +12,25 @@ import (
 )
 
 const (
-	allProcessesIndex = -1
-	sidebarWidth      = 30
-	tickInterval      = 100 * time.Millisecond
+	sidebarWidth = 30
+	tickInterval = 100 * time.Millisecond
 )
+
+type sidebarItemKind int
+
+const (
+	itemAllProcesses sidebarItemKind = iota
+	itemGroup
+	itemProcess
+)
+
+type sidebarItem struct {
+	kind          sidebarItemKind
+	label         string
+	group         string
+	commandIndex  int
+	indent        bool
+}
 
 type paneFocus int
 
@@ -29,18 +44,18 @@ type restartCompleteMsg struct{}
 type stopCompleteMsg struct{}
 
 type TUI struct {
-	commands         []CommandInfo
-	processManager   *ProcessManager
-	logBuffer        *LogBuffer
-	viewport         viewport.Model
-	selectedIndex    int
-	focusedPane      paneFocus
-	rawMode          bool
-	exiting          bool
-	newLogsBelow     bool
-	lastLogLineCount int
-	width            int
-	height           int
+	commands             []CommandInfo
+	processManager       *ProcessManager
+	logBuffer            *LogBuffer
+	viewport             viewport.Model
+	selectedSidebarIndex int
+	focusedPane          paneFocus
+	rawMode              bool
+	exiting              bool
+	newLogsBelow         bool
+	lastLogLineCount     int
+	width                int
+	height               int
 }
 
 var (
@@ -78,11 +93,13 @@ var (
 			Bold(true)
 )
 
-func RenderTUI(commands []CommandInfo, processManager *ProcessManager, logBuffer *LogBuffer) {
+func RenderTUI(commands []CommandInfo, defaultGroup string, processManager *ProcessManager, logBuffer *LogBuffer) {
+	items := buildSidebarItems(commands)
 	tui := TUI{
-		commands:       commands,
-		processManager: processManager,
-		logBuffer:      logBuffer,
+		commands:             commands,
+		processManager:       processManager,
+		logBuffer:            logBuffer,
+		selectedSidebarIndex: initialSidebarSelection(items, defaultGroup),
 		viewport: viewport.New(
 			viewport.WithWidth(1),
 			viewport.WithHeight(1),
@@ -187,12 +204,16 @@ func (t TUI) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			t.syncNewLogIndicator()
 		}
 	case "r":
-		if !t.rawMode && t.focusedPane == focusSidebar && t.selectedIndex != allProcessesIndex {
-			return t, restartCmd(t.processManager, t.commands[t.selectedIndex].ID)
+		if !t.rawMode && t.focusedPane == focusSidebar {
+			if item, ok := t.selectedProcessItem(); ok {
+				return t, restartCmd(t.processManager, t.commands[item.commandIndex].ID)
+			}
 		}
 	case "s":
-		if !t.rawMode && t.focusedPane == focusSidebar && t.selectedIndex != allProcessesIndex {
-			return t, stopCmd(t.processManager, t.commands[t.selectedIndex].ID)
+		if !t.rawMode && t.focusedPane == focusSidebar {
+			if item, ok := t.selectedProcessItem(); ok {
+				return t, stopCmd(t.processManager, t.commands[item.commandIndex].ID)
+			}
 		}
 	}
 	return t, nil
@@ -246,23 +267,27 @@ func stopCmd(processManager *ProcessManager, processID int) tea.Cmd {
 }
 
 func (t *TUI) selectPrevious() {
-	if t.selectedIndex == allProcessesIndex {
-		t.selectedIndex = len(t.commands) - 1
-	} else if t.selectedIndex == 0 {
-		t.selectedIndex = allProcessesIndex
+	items := t.sidebarItems()
+	if len(items) == 0 {
+		return
+	}
+	if t.selectedSidebarIndex <= 0 {
+		t.selectedSidebarIndex = len(items) - 1
 	} else {
-		t.selectedIndex--
+		t.selectedSidebarIndex--
 	}
 	t.refreshViewport(true)
 }
 
 func (t *TUI) selectNext() {
-	if t.selectedIndex == allProcessesIndex {
-		t.selectedIndex = 0
-	} else if t.selectedIndex == len(t.commands)-1 {
-		t.selectedIndex = allProcessesIndex
+	items := t.sidebarItems()
+	if len(items) == 0 {
+		return
+	}
+	if t.selectedSidebarIndex >= len(items)-1 {
+		t.selectedSidebarIndex = 0
 	} else {
-		t.selectedIndex++
+		t.selectedSidebarIndex++
 	}
 	t.refreshViewport(true)
 }
@@ -348,9 +373,15 @@ func (t TUI) mainView(height int) string {
 	}
 
 	title := " All Logs "
-	if t.selectedIndex != allProcessesIndex && t.selectedIndex >= 0 && t.selectedIndex < len(t.commands) {
-		command := t.commands[t.selectedIndex]
-		title = " " + command.Name + " - " + command.Command + " "
+	if item, ok := t.currentSidebarItem(); ok {
+		switch item.kind {
+		case itemProcess:
+			command := t.commands[item.commandIndex]
+			title = " " + command.Name + " - " + command.Command + " "
+		case itemGroup:
+			count := len(t.groupCommandIndices(item.group))
+			title = fmt.Sprintf(" %s (%d processes) ", item.label, count)
+		}
 	}
 
 	restarts, crashes := t.visibleCounts()
@@ -383,34 +414,17 @@ func (t TUI) sidebarLines(width, height int) []string {
 	}
 	lines = append(lines, headerStyle.Width(width).Render(headerPrefix+"Commands"))
 
-	allLine := statusRow("All processes", "---", width, t.selectedIndex == allProcessesIndex, "")
-	lines = append(lines, allLine)
-
-	available := max(0, height-2)
+	items := t.sidebarItems()
+	available := max(0, height-1)
 	start := 0
-	if t.selectedIndex != allProcessesIndex && t.selectedIndex >= available {
-		start = t.selectedIndex - available + 1
+	if t.selectedSidebarIndex >= available {
+		start = t.selectedSidebarIndex - available + 1
 	}
-	end := min(len(t.commands), start+available)
+	end := min(len(items), start+available)
 	for index := start; index < end; index++ {
-		command := t.commands[index]
-		status := t.processManager.GetStatus(command.ID)
-		state := t.processManager.RestartState(command.ID)
-		statusText := "DOWN"
-		statusColor := "#ff0000"
-		if t.processManager.IsManuallyStopped(command.ID) {
-			statusText = "STOP"
-			statusColor = "#888888"
-		} else if status == StatusRunning {
-			statusText = "UP"
-			statusColor = "#00ff00"
-		} else if status == StatusError {
-			statusText = "ERROR"
-			statusColor = "#ffaa00"
-		} else if state.IsRestarting && status != StatusRunning {
-			statusText = "› DOWN"
-		}
-		lines = append(lines, statusRow(command.Name, statusText, width, index == t.selectedIndex, statusColor))
+		item := items[index]
+		statusText, statusColor := t.sidebarItemStatus(item)
+		lines = append(lines, statusRow(item.label, statusText, width, index == t.selectedSidebarIndex, statusColor, item.indent))
 	}
 
 	blank := lipgloss.NewStyle().Width(width).Render("")
@@ -420,12 +434,18 @@ func (t TUI) sidebarLines(width, height int) []string {
 	return lines[:height]
 }
 
-func statusRow(name, status string, width int, selected bool, statusColor string) string {
+func statusRow(name, status string, width int, selected bool, statusColor string, indent bool) string {
 	statusWidth := 8
 	nameWidth := max(0, width-2-statusWidth)
 	prefix := "  "
+	if indent {
+		prefix = "    "
+	}
 	if selected {
 		prefix = "• "
+		if indent {
+			prefix = "  • "
+		}
 	}
 	nameText := truncateDisplay(name, nameWidth)
 	statusText := padStartDisplay(status, statusWidth)
@@ -459,7 +479,7 @@ func (t TUI) logLines() []string {
 	lines := make([]string, 0, len(logs))
 	width, _ := t.logAreaSize()
 	for _, entry := range logs {
-		lines = append(lines, renderLogLine(entry, width, t.selectedIndex == allProcessesIndex, t.commands, !t.rawMode))
+		lines = append(lines, renderLogLine(entry, width, t.isUnifiedLogView(), t.commands, !t.rawMode))
 	}
 	return lines
 }
@@ -500,29 +520,232 @@ func processName(processID int, commands []CommandInfo) string {
 func (t TUI) visibleCounts() (int, int) {
 	restarts := 0
 	crashes := 0
-	if t.selectedIndex == allProcessesIndex {
-		for _, command := range t.commands {
-			state := t.processManager.RestartState(command.ID)
-			restarts += state.RestartCount
-			crashes += state.CrashCount
-		}
-		return restarts, crashes
+	item, ok := t.currentSidebarItem()
+	if !ok {
+		return 0, 0
 	}
-	if t.selectedIndex >= 0 && t.selectedIndex < len(t.commands) {
-		state := t.processManager.RestartState(t.commands[t.selectedIndex].ID)
-		return state.RestartCount, state.CrashCount
+
+	indices := t.visibleCommandIndices(item)
+	for _, index := range indices {
+		state := t.processManager.RestartState(t.commands[index].ID)
+		restarts += state.RestartCount
+		crashes += state.CrashCount
 	}
-	return 0, 0
+	return restarts, crashes
 }
 
 func (t TUI) currentLogs() []LogEntry {
-	if t.selectedIndex == allProcessesIndex {
+	item, ok := t.currentSidebarItem()
+	if !ok {
+		return nil
+	}
+	switch item.kind {
+	case itemAllProcesses:
 		return t.logBuffer.UnifiedLogs()
+	case itemGroup:
+		return t.logBuffer.LogsForProcessIDs(t.groupProcessIDs(item.group))
+	case itemProcess:
+		return t.logBuffer.Logs(t.commands[item.commandIndex].ID)
+	default:
+		return nil
 	}
-	if t.selectedIndex >= 0 && t.selectedIndex < len(t.commands) {
-		return t.logBuffer.Logs(t.commands[t.selectedIndex].ID)
+}
+
+func buildSidebarItems(commands []CommandInfo) []sidebarItem {
+	items := []sidebarItem{{kind: itemAllProcesses, label: "All processes"}}
+
+	groupOrder := make([]string, 0)
+	groups := make(map[string][]int)
+	ungrouped := make([]int, 0)
+
+	for index, command := range commands {
+		if command.Group == "" {
+			ungrouped = append(ungrouped, index)
+			continue
+		}
+		if _, exists := groups[command.Group]; !exists {
+			groupOrder = append(groupOrder, command.Group)
+		}
+		groups[command.Group] = append(groups[command.Group], index)
 	}
-	return nil
+
+	for _, group := range groupOrder {
+		items = append(items, sidebarItem{kind: itemGroup, label: group, group: group})
+		for _, index := range groups[group] {
+			items = append(items, sidebarItem{
+				kind:         itemProcess,
+				label:        commands[index].Name,
+				commandIndex: index,
+				indent:       true,
+			})
+		}
+	}
+
+	for _, index := range ungrouped {
+		items = append(items, sidebarItem{
+			kind:         itemProcess,
+			label:        commands[index].Name,
+			commandIndex: index,
+		})
+	}
+
+	return items
+}
+
+func initialSidebarSelection(items []sidebarItem, defaultGroup string) int {
+	if defaultGroup == "" {
+		return 0
+	}
+	for index, item := range items {
+		if item.kind == itemGroup && item.group == defaultGroup {
+			return index
+		}
+	}
+	return 0
+}
+
+func (t TUI) sidebarItems() []sidebarItem {
+	return buildSidebarItems(t.commands)
+}
+
+func (t TUI) currentSidebarItem() (sidebarItem, bool) {
+	items := t.sidebarItems()
+	if t.selectedSidebarIndex < 0 || t.selectedSidebarIndex >= len(items) {
+		return sidebarItem{}, false
+	}
+	return items[t.selectedSidebarIndex], true
+}
+
+func (t TUI) selectedProcessItem() (sidebarItem, bool) {
+	item, ok := t.currentSidebarItem()
+	if !ok || item.kind != itemProcess {
+		return sidebarItem{}, false
+	}
+	return item, true
+}
+
+func (t TUI) isUnifiedLogView() bool {
+	item, ok := t.currentSidebarItem()
+	if !ok {
+		return false
+	}
+	return item.kind == itemAllProcesses || item.kind == itemGroup
+}
+
+func (t TUI) groupCommandIndices(group string) []int {
+	indices := make([]int, 0)
+	for index, command := range t.commands {
+		if command.Group == group {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+func (t TUI) groupProcessIDs(group string) []int {
+	indices := t.groupCommandIndices(group)
+	ids := make([]int, len(indices))
+	for i, index := range indices {
+		ids[i] = t.commands[index].ID
+	}
+	return ids
+}
+
+func (t TUI) visibleCommandIndices(item sidebarItem) []int {
+	switch item.kind {
+	case itemAllProcesses:
+		indices := make([]int, len(t.commands))
+		for i := range t.commands {
+			indices[i] = i
+		}
+		return indices
+	case itemGroup:
+		return t.groupCommandIndices(item.group)
+	case itemProcess:
+		return []int{item.commandIndex}
+	default:
+		return nil
+	}
+}
+
+func (t TUI) sidebarItemStatus(item sidebarItem) (string, string) {
+	switch item.kind {
+	case itemAllProcesses:
+		return "---", ""
+	case itemGroup:
+		return t.aggregateStatus(t.groupCommandIndices(item.group))
+	case itemProcess:
+		return t.commandStatus(item.commandIndex)
+	default:
+		return "---", ""
+	}
+}
+
+func (t TUI) commandStatus(commandIndex int) (string, string) {
+	command := t.commands[commandIndex]
+	status := t.processManager.GetStatus(command.ID)
+	state := t.processManager.RestartState(command.ID)
+	if t.processManager.IsManuallyStopped(command.ID) {
+		return "STOP", "#888888"
+	}
+	if status == StatusRunning {
+		return "UP", "#00ff00"
+	}
+	if status == StatusError {
+		return "ERROR", "#ffaa00"
+	}
+	if state.IsRestarting && status != StatusRunning {
+		return "› DOWN", "#ff0000"
+	}
+	return "DOWN", "#ff0000"
+}
+
+func (t TUI) aggregateStatus(commandIndices []int) (string, string) {
+	if len(commandIndices) == 0 {
+		return "---", ""
+	}
+
+	hasError := false
+	hasDown := false
+	allStopped := true
+	allRunning := true
+
+	for _, index := range commandIndices {
+		command := t.commands[index]
+		status := t.processManager.GetStatus(command.ID)
+		state := t.processManager.RestartState(command.ID)
+		stopped := t.processManager.IsManuallyStopped(command.ID)
+
+		if status == StatusError {
+			hasError = true
+		}
+		if status != StatusRunning && !stopped {
+			allRunning = false
+		}
+		if !stopped {
+			allStopped = false
+		}
+		if status != StatusRunning && status != StatusError && !stopped {
+			hasDown = true
+		}
+		if state.IsRestarting && status != StatusRunning {
+			hasDown = true
+		}
+	}
+
+	if hasError {
+		return "ERROR", "#ffaa00"
+	}
+	if allStopped {
+		return "STOP", "#888888"
+	}
+	if allRunning {
+		return "UP", "#00ff00"
+	}
+	if hasDown {
+		return "DOWN", "#ff0000"
+	}
+	return "---", ""
 }
 
 func (t TUI) sidebarWidth() int {

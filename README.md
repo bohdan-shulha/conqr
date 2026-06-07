@@ -107,6 +107,30 @@ Per-process restart settings override global settings:
 }
 ```
 
+### Process Groups
+
+Group commands in the sidebar and view merged logs per group. Use the object form for grouped commands:
+
+```json
+{
+  "defaultGroup": "services",
+  "commands": {
+    "api": { "command": "npm run api", "group": "services" },
+    "ssr": { "command": "npm run ssr", "group": "services" },
+    "worker": { "command": "npm run worker", "group": "services" },
+    "cf": { "command": "cloudflared tunnel run", "group": "tunnels" },
+    "emails": { "command": "npm run build:emails", "group": "build" }
+  }
+}
+```
+
+- `group`: optional label used for sidebar sections and merged log views
+- `defaultGroup`: optional group selected on startup (falls back to "All processes" if missing)
+- Simple string commands cannot carry a `group`; use the object form instead
+- Select a group row to see merged logs from all processes in that group
+- Select an indented process row to see logs for one process
+- Stop/restart (`s`/`r`) work on individual process rows only
+
 ### JSON Schema
 
 For IDE autocomplete and validation, add a `$schema` reference:
@@ -133,6 +157,7 @@ go run . 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
 
 - Run multiple commands concurrently
 - Two-pane terminal interface with process statuses and logs
+- Process groups with merged log views per group
 - Unified "All processes" log view
 - ANSI color support in logs
 - Automatic error detection from common error patterns and red ANSI output

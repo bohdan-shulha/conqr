@@ -17,6 +17,7 @@ type CommandInfo struct {
 	ID      int
 	Name    string
 	Command string
+	Group   string
 	Restart *RestartConfig
 }
 
