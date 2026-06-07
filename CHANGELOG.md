@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.3.0] - 2026-06-07
+
+- chore: release v2.1.0
+- feat(tui): add process groups with merged log views
+- feat(tui): add manual process stop with s key
+- fix(tui): preserve scroll when toggling log-only
+- fix(tui): preserve log viewport while scrolled
+
 ## [2.1.0] - 2026-06-07
 
 - feat(tui): add process groups with merged log views
