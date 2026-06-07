@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0] - 2026-06-07
+
+- feat(tui): add process groups with merged log views
+- feat(tui): add manual process stop with s key
+- fix(tui): preserve scroll when toggling log-only
+- fix(tui): preserve log viewport while scrolled
+
 ## [v2.0.0] - 2026-05-30
 
 - ci: harden npm release publishing- Maintenance release.
