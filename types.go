@@ -1,5 +1,10 @@
 package main
 
+import (
+	"regexp"
+	"time"
+)
+
 type RestartPolicy string
 
 const (
@@ -14,11 +19,15 @@ type RestartConfig struct {
 }
 
 type CommandInfo struct {
-	ID      int
-	Name    string
-	Command string
-	Group   string
-	Restart *RestartConfig
+	ID           int
+	Name         string
+	Command      string
+	Group        string
+	DependsOn    []string
+	Ready        *regexp.Regexp
+	Busy         *regexp.Regexp
+	ReadyTimeout time.Duration
+	Restart      *RestartConfig
 }
 
 type ProcessStatus string
@@ -41,3 +50,5 @@ var defaultRestartConfig = RestartConfig{
 	Policy: RestartNever,
 	Delay:  1000,
 }
+
+const defaultReadyTimeout = 120 * time.Second

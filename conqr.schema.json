@@ -35,6 +35,19 @@
       "$ref": "#/$defs/RestartConfig",
       "description": "Global restart configuration applied to all commands by default"
     },
+    "ready": {
+      "type": "string",
+      "description": "Default regular expression that marks a command as ready. conqr matches it against each output line after it removes the ANSI codes."
+    },
+    "busy": {
+      "type": "string",
+      "description": "Default regular expression that marks a command as busy again, for example the rebuild message of a watch process."
+    },
+    "readyTimeout": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Time in milliseconds to wait for a dependency before the dependents start anyway. The default is 120000."
+    },
     "commands": {
       "description": "Commands to run concurrently as an object with name-command pairs.",
       "type": "object",
@@ -56,6 +69,19 @@
                 "group": {
                   "type": "string",
                   "description": "Optional group name for sidebar organization and merged log views"
+                },
+                "dependsOn": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Names of other commands that must become ready before this command starts"
+                },
+                "ready": {
+                  "type": "string",
+                  "description": "Regular expression that marks this command as ready. An empty string clears an inherited global pattern."
+                },
+                "busy": {
+                  "type": "string",
+                  "description": "Regular expression that marks this command as busy again. An empty string clears an inherited global pattern."
                 },
                 "restart": {
                   "$ref": "#/$defs/RestartConfig",
@@ -141,6 +167,21 @@
             "policy": "on-exit",
             "delay": 5000
           }
+        }
+      }
+    },
+    {
+      "$comment": "Example 6: Startup dependencies for watch-mode services",
+      "ready": "Found 0 errors\\. Watching for file changes",
+      "busy": "File change detected",
+      "commands": {
+        "core": { "command": "tsc -w -p packages/core" },
+        "emails": { "command": "npm run build:emails", "ready": "" },
+        "api": { "command": "tsc -w -p apps/api", "dependsOn": ["core"] },
+        "web": {
+          "command": "vite dev",
+          "dependsOn": ["core", "emails"],
+          "ready": "ready in \\d+ ms"
         }
       }
     }

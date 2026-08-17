@@ -276,3 +276,62 @@ func TestTUIGroupSelectionShowsMergedLogs(t *testing.T) {
 func keyPress(value string) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Text: value, Code: []rune(value)[0]})
 }
+
+func TestCommandStatusShowsWaitAndBuild(t *testing.T) {
+	manager := NewProcessManager(NewLogBuffer())
+	commands := []CommandInfo{{ID: 0, Name: "api", Command: "npm run api"}}
+	tui := TUI{commands: commands, processManager: manager}
+
+	manager.markWaiting(0, true)
+	if status, _ := tui.commandStatus(0); status != "WAIT" {
+		t.Fatalf("expected WAIT for a waiting process, got %q", status)
+	}
+
+	manager.markWaiting(0, false)
+	manager.mu.Lock()
+	manager.processes[0] = &processInfo{CommandInfo: commands[0], Status: StatusRunning}
+	manager.mu.Unlock()
+
+	manager.markBuilding(0)
+	if status, _ := tui.commandStatus(0); status != "BUILD" {
+		t.Fatalf("expected BUILD for a building process, got %q", status)
+	}
+
+	manager.markReady(0)
+	if status, _ := tui.commandStatus(0); status != "UP" {
+		t.Fatalf("expected UP for a ready process, got %q", status)
+	}
+}
+
+func TestAggregateStatusReportsWaitAndBuild(t *testing.T) {
+	manager := NewProcessManager(NewLogBuffer())
+	commands := []CommandInfo{
+		{ID: 0, Name: "core", Command: "tsc -w", Group: "services"},
+		{ID: 1, Name: "api", Command: "tsc -w -p api", Group: "services"},
+	}
+	tui := TUI{commands: commands, processManager: manager}
+
+	manager.mu.Lock()
+	manager.processes[0] = &processInfo{CommandInfo: commands[0], Status: StatusRunning}
+	manager.mu.Unlock()
+	manager.markBuilding(0)
+	manager.markWaiting(1, true)
+
+	if status, _ := tui.aggregateStatus([]int{0, 1}); status != "WAIT" {
+		t.Fatalf("expected WAIT while a member waits, got %q", status)
+	}
+
+	manager.markWaiting(1, false)
+	manager.mu.Lock()
+	manager.processes[1] = &processInfo{CommandInfo: commands[1], Status: StatusRunning}
+	manager.mu.Unlock()
+
+	if status, _ := tui.aggregateStatus([]int{0, 1}); status != "BUILD" {
+		t.Fatalf("expected BUILD while a member builds, got %q", status)
+	}
+
+	manager.markReady(0)
+	if status, _ := tui.aggregateStatus([]int{0, 1}); status != "UP" {
+		t.Fatalf("expected UP when every member is ready, got %q", status)
+	}
+}

@@ -131,6 +131,73 @@ Group commands in the sidebar and view merged logs per group. Use the object for
 - Select an indented process row to see logs for one process
 - Stop/restart (`s`/`r`) work on individual process rows only
 
+### Startup Dependencies
+
+Watch-mode services start at the same time by default. In a monorepo this makes a rebuild
+waterfall: each package compiles against an incomplete build of the package below it, and then
+compiles again when that package writes its output.
+
+Use `dependsOn` and `ready` to start each service only after its dependencies finish the first
+build:
+
+```json
+{
+  "ready": "Found 0 errors\\. Watching for file changes",
+  "busy": "File change detected",
+  "commands": {
+    "core": { "command": "tsc -w -p packages/core" },
+    "db": { "command": "tsc -w -p packages/db", "dependsOn": ["core"] },
+    "emails": { "command": "npm run build:emails", "ready": "" },
+    "api": { "command": "tsc -w -p apps/api", "dependsOn": ["core", "db"] },
+    "web": {
+      "command": "vite dev",
+      "dependsOn": ["core", "emails"],
+      "ready": "ready in \\d+ ms"
+    }
+  }
+}
+```
+
+- `dependsOn`: names of other commands that must become ready first
+- `ready`: regular expression that marks the command as ready
+- `busy`: regular expression that marks the command as busy again
+- `readyTimeout`: milliseconds to wait for a dependency (default 120000)
+
+Every command that has no unmet dependency starts at once. Each other command starts as soon as its
+dependencies report ready.
+
+A command becomes ready in one of three ways:
+
+1. An output line matches the `ready` pattern.
+2. The command exits with code 0. Use this for a one-shot build step.
+3. The `readyTimeout` expires. conqr then writes a warning and starts the dependents.
+
+A non-zero exit does not make a command ready. The dependents wait for the timeout.
+
+Rules for the patterns:
+
+- Global `ready` and `busy` apply to all commands. A per-command value overrides the global value.
+- An empty string clears an inherited global pattern.
+- conqr removes the ANSI colour codes from a line before it matches the pattern.
+- conqr tests `busy` before `ready`.
+- A long-running dependency needs a `ready` pattern. Without one it gates the dependents until the
+  timeout.
+
+Sidebar labels:
+
+| Label | Meaning |
+|---|---|
+| `WAIT` | The command waits for a dependency |
+| `BUILD` | The command runs and builds now |
+| `UP` | The command runs and is ready |
+| `ERROR` | conqr found an error pattern in the recent output |
+| `DOWN` | The command is not running |
+| `STOP` | You stopped the command with `s` |
+
+conqr removes the startup waterfall. conqr cannot remove the rebuild cascade after startup, because
+each watch process rebuilds on its own. To remove that cascade, replace the separate watch processes
+with one incremental build, for example `tsc -b --watch` over TypeScript project references.
+
 ### JSON Schema
 
 For IDE autocomplete and validation, add a `$schema` reference:
@@ -156,6 +223,8 @@ go run . 'node demo/logger1.js' 'node demo/logger2.js' 'node demo/logger3.js'
 ## Features
 
 - Run multiple commands concurrently
+- Dependency-ordered startup with readiness detection
+- Live build state for watch-mode processes
 - Two-pane terminal interface with process statuses and logs
 - Process groups with merged log views per group
 - Unified "All processes" log view
