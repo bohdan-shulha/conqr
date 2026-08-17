@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.2] - 2026-08-17
+
+- fix(process-manager): remove the data race on the process state that `go test -race` reports
+- fix(process-manager): let `r` start a process that you stop while it waits for a dependency
+- fix(process-manager): report `› Stop initiated` when you stop a waiting process
+- chore: run the tests with the race detector in `make test`
+
 ## [2.4.1] - 2026-08-17
 
 - fix(npm): resolve bundled binary on x64 hosts (#20)- Maintenance release.
@@ -7,14 +14,11 @@
 
 ## [2.4.0] - 2026-08-17
 
-- feat(startup): add dependency-ordered startup with readiness detection (#19)- Maintenance release.
-
-
-## Unreleased
-
-- feat: add dependency-ordered startup with `dependsOn`, `ready`, `busy`, and `readyTimeout`
+- feat(startup): add dependency-ordered startup with readiness detection (#19)
+- feat: add the `dependsOn`, `ready`, `busy`, and `readyTimeout` config keys
 - feat(tui): add the `WAIT` and `BUILD` status labels
 - fix: keep the group and the command configuration after a restart
+
 
 ## [2.3.0] - 2026-06-07
 

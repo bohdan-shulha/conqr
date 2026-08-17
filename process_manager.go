@@ -20,6 +20,7 @@ type processInfo struct {
 	Cmd    *exec.Cmd
 	RunID  int
 	PID    int
+	exited chan struct{}
 }
 
 type RestartState struct {
@@ -46,6 +47,7 @@ type ProcessManager struct {
 	logBuffer               *LogBuffer
 	shuttingDown            bool
 	shutdownSignal          chan struct{}
+	commands                map[int]CommandInfo
 	readyStates             map[int]*readyState
 	restartTimers           map[int]*time.Timer
 	restartCounts           map[int]int
@@ -62,6 +64,7 @@ func NewProcessManager(logBuffer *LogBuffer) *ProcessManager {
 		processes:               make(map[int]*processInfo),
 		logBuffer:               logBuffer,
 		shutdownSignal:          make(chan struct{}),
+		commands:                make(map[int]CommandInfo),
 		readyStates:             make(map[int]*readyState),
 		restartTimers:           make(map[int]*time.Timer),
 		restartCounts:           make(map[int]int),
@@ -80,11 +83,14 @@ func (pm *ProcessManager) StartAll(commands []CommandInfo) {
 		idsByName[command.Name] = command.ID
 	}
 
+	pm.mu.Lock()
 	for _, command := range commands {
+		pm.commands[command.ID] = command
 		if len(command.DependsOn) > 0 {
-			pm.markWaiting(command.ID, true)
+			pm.readyStateFor(command.ID).waiting = true
 		}
 	}
+	pm.mu.Unlock()
 
 	for _, command := range commands {
 		if len(command.DependsOn) == 0 {
@@ -124,11 +130,29 @@ func (pm *ProcessManager) startWhenReady(commandInfo CommandInfo, dependencies [
 		}
 	}
 
-	if pm.IsManuallyStopped(commandInfo.ID) {
+	pm.markWaiting(commandInfo.ID, false)
+	if !pm.claimStart(commandInfo.ID) {
 		return
 	}
-	pm.markWaiting(commandInfo.ID, false)
 	_ = pm.StartCommand(commandInfo)
+	pm.releaseStart(commandInfo.ID)
+}
+
+func (pm *ProcessManager) claimStart(processID int) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if pm.shuttingDown || pm.manuallyStopped[processID] ||
+		pm.processes[processID] != nil || pm.restartInFlight[processID] {
+		return false
+	}
+	pm.restartInFlight[processID] = true
+	return true
+}
+
+func (pm *ProcessManager) releaseStart(processID int) {
+	pm.mu.Lock()
+	delete(pm.restartInFlight, processID)
+	pm.mu.Unlock()
 }
 
 func (pm *ProcessManager) readyStateFor(processID int) *readyState {
@@ -214,13 +238,16 @@ func (pm *ProcessManager) StartCommand(commandInfo CommandInfo) error {
 
 	if err := cmd.Start(); err != nil {
 		pm.logBuffer.Add(commandInfo.ID, "Process error: "+err.Error(), SourceStderr, true)
-		pm.mu.Lock()
-		pm.processes[commandInfo.ID] = &processInfo{
+		failed := &processInfo{
 			CommandInfo: commandInfo,
 			Status:      StatusError,
 			Cmd:         cmd,
 			RunID:       runID,
+			exited:      make(chan struct{}),
 		}
+		close(failed.exited)
+		pm.mu.Lock()
+		pm.processes[commandInfo.ID] = failed
 		pm.mu.Unlock()
 		pm.markReady(commandInfo.ID)
 		return err
@@ -234,6 +261,7 @@ func (pm *ProcessManager) StartCommand(commandInfo CommandInfo) error {
 		Cmd:         cmd,
 		RunID:       runID,
 		PID:         cmd.Process.Pid,
+		exited:      make(chan struct{}),
 	}
 
 	pm.mu.Lock()
@@ -243,7 +271,7 @@ func (pm *ProcessManager) StartCommand(commandInfo CommandInfo) error {
 
 	go pm.consumePipe(commandInfo.ID, stdout, SourceStdout)
 	go pm.consumePipe(commandInfo.ID, stderr, SourceStderr)
-	go pm.waitForExit(commandInfo.ID, cmd, runID)
+	go pm.waitForExit(info)
 
 	return nil
 }
@@ -274,15 +302,17 @@ func (pm *ProcessManager) consumePipe(processID int, reader io.Reader, source Lo
 	}
 }
 
-func (pm *ProcessManager) waitForExit(processID int, cmd *exec.Cmd, runID int) {
+func (pm *ProcessManager) waitForExit(info *processInfo) {
+	cmd := info.Cmd
 	err := cmd.Wait()
+	close(info.exited)
 	code := exitCode(err)
+	processID := info.ID
 
 	pm.mu.Lock()
 	wasIntentional := pm.intentionalExitCommands[cmd]
 	delete(pm.intentionalExitCommands, cmd)
-	info := pm.processes[processID]
-	if info == nil || info.Cmd != cmd {
+	if pm.processes[processID] != info {
 		pm.mu.Unlock()
 		return
 	}
@@ -306,7 +336,7 @@ func (pm *ProcessManager) waitForExit(processID int, cmd *exec.Cmd, runID int) {
 	willRestart := false
 	if restartConfig != nil && !wasIntentional && !shuttingDown && !manuallyStopped {
 		if restartConfig.Policy == RestartOnExit || (restartConfig.Policy == RestartOnError && hasNonZeroExitCode) {
-			pm.scheduleRestart(processID, restartConfig.Delay, code, runID)
+			pm.scheduleRestart(processID, restartConfig.Delay, code, info.RunID)
 			willRestart = true
 		}
 	}
@@ -445,7 +475,7 @@ func (pm *ProcessManager) beginShutdown() []*processInfo {
 
 func allExited(infos []*processInfo) bool {
 	for _, info := range infos {
-		if info != nil && isLive(info.Cmd) {
+		if isLive(info) {
 			return false
 		}
 	}
@@ -478,12 +508,7 @@ func (pm *ProcessManager) Stop(processID int, manual bool) {
 	pm.manuallyStopped[processID] = true
 
 	info := pm.processes[processID]
-	if info == nil {
-		delete(pm.stopInFlight, processID)
-		pm.mu.Unlock()
-		return
-	}
-	live := isLive(info.Cmd)
+	live := isLive(info)
 	pm.mu.Unlock()
 
 	if manual {
@@ -492,6 +517,13 @@ func (pm *ProcessManager) Stop(processID int, manual bool) {
 			message = "› Stop initiated, SIGTERM signal sent"
 		}
 		pm.logBuffer.Add(processID, message, SourceStdout, true)
+	}
+
+	if info == nil {
+		pm.mu.Lock()
+		delete(pm.stopInFlight, processID)
+		pm.mu.Unlock()
+		return
 	}
 
 	if live {
@@ -523,14 +555,26 @@ func (pm *ProcessManager) Restart(processID int, manual bool) {
 
 	info := pm.processes[processID]
 	if info == nil {
-		delete(pm.restartInFlight, processID)
+		commandInfo, known := pm.commands[processID]
+		if !known {
+			delete(pm.restartInFlight, processID)
+			pm.mu.Unlock()
+			return
+		}
+		pm.readyStateFor(processID).waiting = false
 		pm.mu.Unlock()
+
+		if manual {
+			pm.logBuffer.Add(processID, "› Restart initiated", SourceStdout, true)
+		}
+		_ = pm.StartCommand(commandInfo)
+		pm.releaseStart(processID)
 		return
 	}
 	if pm.isRestarting[processID] {
 		pm.isRestarting[processID] = false
 	}
-	live := isLive(info.Cmd)
+	live := isLive(info)
 	pm.mu.Unlock()
 
 	if manual {
@@ -614,38 +658,41 @@ func formatExitMessageWithRestart(code *int, delay int) string {
 	return fmt.Sprintf("× Process exited with code %d › %.1fs", *code, delaySeconds)
 }
 
-func isLive(cmd *exec.Cmd) bool {
-	return cmd != nil && cmd.Process != nil && cmd.ProcessState == nil
+func isLive(info *processInfo) bool {
+	if info == nil || info.Cmd == nil || info.Cmd.Process == nil {
+		return false
+	}
+	select {
+	case <-info.exited:
+		return false
+	default:
+		return true
+	}
 }
 
 func (pm *ProcessManager) killOne(info *processInfo) {
-	if info == nil || !isLive(info.Cmd) {
+	if !isLive(info) {
 		return
 	}
 
 	pm.killProcess(info, terminateSignal)
-	waitForProcessExit(info.Cmd, time.Second)
-	if isLive(info.Cmd) {
+	waitForProcessExit(info, time.Second)
+	if isLive(info) {
 		pm.killProcess(info, killSignal)
-		waitForProcessExit(info.Cmd, 500*time.Millisecond)
+		waitForProcessExit(info, 500*time.Millisecond)
 	}
 }
 
-func waitForProcessExit(cmd *exec.Cmd, timeout time.Duration) {
+func waitForProcessExit(info *processInfo, timeout time.Duration) {
+	if info == nil || info.exited == nil {
+		return
+	}
 	deadline := time.NewTimer(timeout)
-	ticker := time.NewTicker(10 * time.Millisecond)
 	defer deadline.Stop()
-	defer ticker.Stop()
 
-	for {
-		if !isLive(cmd) {
-			return
-		}
-		select {
-		case <-deadline.C:
-			return
-		case <-ticker.C:
-		}
+	select {
+	case <-info.exited:
+	case <-deadline.C:
 	}
 }
 
@@ -746,7 +793,7 @@ func (pm *ProcessManager) checkRecentErrors(processID int) {
 	}
 	if hasRecentError && info.Status == StatusRunning {
 		info.Status = StatusError
-	} else if !hasRecentError && info.Status == StatusError && isLive(info.Cmd) {
+	} else if !hasRecentError && info.Status == StatusError && isLive(info) {
 		info.Status = StatusRunning
 	}
 }

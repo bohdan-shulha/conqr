@@ -4,7 +4,7 @@ build:
 	go build -o bin/conqr .
 
 test:
-	go test ./...
+	go test -race ./...
 
 install:
 	go install .

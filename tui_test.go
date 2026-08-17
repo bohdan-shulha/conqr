@@ -100,19 +100,18 @@ func TestTUIRestartRunsAsCommand(t *testing.T) {
 }
 
 func TestWaitForProcessExitReturnsPromptly(t *testing.T) {
-	command := shellCommand("exit 0")
-	if err := command.Start(); err != nil {
+	info := &processInfo{Cmd: shellCommand("exit 0"), exited: make(chan struct{})}
+	if err := info.Cmd.Start(); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	done := make(chan struct{})
 	go func() {
-		_ = command.Wait()
-		close(done)
+		_ = info.Cmd.Wait()
+		close(info.exited)
 	}()
-	<-done
+	<-info.exited
 
 	start := time.Now()
-	waitForProcessExit(command, time.Second)
+	waitForProcessExit(info, time.Second)
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Fatalf("expected prompt wait return for exited process, took %s", elapsed)
 	}
