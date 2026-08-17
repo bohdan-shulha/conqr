@@ -4,15 +4,13 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { binaryName } from './binary-name.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const platform = process.platform;
 const arch = process.arch;
 
-const binaryName = platform === 'win32'
-  ? `conqr-${platform}-${arch}.exe`
-  : `conqr-${platform}-${arch}`;
-const binaryPath = join(__dirname, '..', 'dist', binaryName);
+const binaryPath = join(__dirname, '..', 'dist', binaryName(platform, arch));
 
 if (!existsSync(binaryPath)) {
   console.error(`conqr: no bundled binary for ${platform}/${arch}`);
