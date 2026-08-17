@@ -25,11 +25,11 @@ const (
 )
 
 type sidebarItem struct {
-	kind          sidebarItemKind
-	label         string
-	group         string
-	commandIndex  int
-	indent        bool
+	kind         sidebarItemKind
+	label        string
+	group        string
+	commandIndex int
+	indent       bool
 }
 
 type paneFocus int

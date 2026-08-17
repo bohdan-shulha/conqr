@@ -290,10 +290,11 @@ func TestStartAllWaitsForDependencyReadyLine(t *testing.T) {
 			Ready:   regexp.MustCompile("READY"),
 		},
 		{
-			ID:        2,
-			Name:      "api",
-			Command:   "sleep 5",
-			DependsOn: []string{"core"},
+			ID:                2,
+			Name:              "api",
+			Command:           "sleep 5",
+			DependsOn:         []string{"core"},
+			DependsOnCommands: []string{"core"},
 		},
 	})
 
@@ -325,7 +326,7 @@ func TestStartAllStartsDependentAfterZeroExit(t *testing.T) {
 
 	manager.StartAll([]CommandInfo{
 		{ID: 1, Name: "emails", Command: shellSleepCommand(200*time.Millisecond, 0)},
-		{ID: 2, Name: "web", Command: "sleep 5", DependsOn: []string{"emails"}},
+		{ID: 2, Name: "web", Command: "sleep 5", DependsOn: []string{"emails"}, DependsOnCommands: []string{"emails"}},
 	})
 
 	time.Sleep(50 * time.Millisecond)
@@ -344,11 +345,12 @@ func TestStartAllStartsDependentAfterReadyTimeout(t *testing.T) {
 	manager.StartAll([]CommandInfo{
 		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
 		{
-			ID:           2,
-			Name:         "api",
-			Command:      "sleep 5",
-			DependsOn:    []string{"core"},
-			ReadyTimeout: 300 * time.Millisecond,
+			ID:                2,
+			Name:              "api",
+			Command:           "sleep 5",
+			DependsOn:         []string{"core"},
+			DependsOnCommands: []string{"core"},
+			ReadyTimeout:      300 * time.Millisecond,
 		},
 	})
 
@@ -371,13 +373,75 @@ func TestReadyTimeoutUnblocksEveryWaiter(t *testing.T) {
 
 	manager.StartAll([]CommandInfo{
 		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
-		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, ReadyTimeout: 300 * time.Millisecond},
-		{ID: 3, Name: "web", Command: "sleep 5", DependsOn: []string{"core"}, ReadyTimeout: 10 * time.Second},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, DependsOnCommands: []string{"core"}, ReadyTimeout: 300 * time.Millisecond},
+		{ID: 3, Name: "web", Command: "sleep 5", DependsOn: []string{"core"}, DependsOnCommands: []string{"core"}, ReadyTimeout: 10 * time.Second},
 	})
 
 	waitUntil(t, func() bool {
 		return manager.GetStatus(2) == StatusRunning && manager.GetStatus(3) == StatusRunning
 	}, 2*time.Second)
+}
+
+func TestStartAllStartsAChainInOrder(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	ready := regexp.MustCompile("READY")
+	manager.StartAll([]CommandInfo{
+		{ID: 1, Name: "core", Command: "sleep 0.2; echo READY; sleep 5", Ready: ready},
+		{
+			ID:                2,
+			Name:              "db",
+			Command:           "sleep 0.2; echo READY; sleep 5",
+			Ready:             ready,
+			DependsOn:         []string{"core"},
+			DependsOnCommands: []string{"core"},
+		},
+		{
+			ID:                3,
+			Name:              "api",
+			Command:           "sleep 5",
+			DependsOn:         []string{"db"},
+			DependsOnCommands: []string{"db"},
+		},
+	})
+
+	waitUntil(t, func() bool { return manager.GetStatus(2) == StatusRunning }, 2*time.Second)
+	if manager.GetStatus(3) == StatusRunning {
+		t.Fatal("expected the last command of the chain to still wait")
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(3) == StatusRunning }, 2*time.Second)
+	if logContains(logBuffer, 3, "is not ready, starting anyway") {
+		t.Fatal("expected no timeout warning in the chain")
+	}
+}
+
+func TestReadyTimeoutAppliesToEachDependency(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	ready := regexp.MustCompile("READY")
+	manager.StartAll([]CommandInfo{
+		{ID: 1, Name: "core", Command: "sleep 0.2; echo READY; sleep 5", Ready: ready},
+		{ID: 2, Name: "db", Command: "sleep 0.4; echo READY; sleep 5", Ready: ready},
+		{
+			ID:                3,
+			Name:              "api",
+			Command:           "sleep 5",
+			DependsOn:         []string{"core", "db"},
+			DependsOnCommands: []string{"core", "db"},
+			ReadyTimeout:      300 * time.Millisecond,
+		},
+	})
+
+	waitUntil(t, func() bool { return manager.GetStatus(3) == StatusRunning }, 2*time.Second)
+
+	if logContains(logBuffer, 3, "is not ready, starting anyway") {
+		t.Fatal("expected each dependency to get its own timeout budget")
+	}
 }
 
 func TestKillAllReleasesWaitingDependent(t *testing.T) {
@@ -386,7 +450,7 @@ func TestKillAllReleasesWaitingDependent(t *testing.T) {
 
 	manager.StartAll([]CommandInfo{
 		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
-		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, DependsOnCommands: []string{"core"}},
 	})
 
 	time.Sleep(50 * time.Millisecond)
@@ -410,7 +474,7 @@ func TestStopCancelsPendingDependentStart(t *testing.T) {
 			Command: "sleep 0.3; echo READY; sleep 5",
 			Ready:   regexp.MustCompile("READY"),
 		},
-		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, DependsOnCommands: []string{"core"}},
 	})
 
 	manager.Stop(2, true)
@@ -541,7 +605,7 @@ func TestRestartStartsDependentStoppedWhileWaiting(t *testing.T) {
 
 	manager.StartAll([]CommandInfo{
 		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
-		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, ReadyTimeout: 10 * time.Second},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, DependsOnCommands: []string{"core"}, ReadyTimeout: 10 * time.Second},
 	})
 
 	time.Sleep(100 * time.Millisecond)
@@ -577,7 +641,7 @@ func TestRestartWhileWaitingStartsDependentOnlyOnce(t *testing.T) {
 
 	manager.StartAll([]CommandInfo{
 		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
-		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, ReadyTimeout: 200 * time.Millisecond},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, DependsOnCommands: []string{"core"}, ReadyTimeout: 200 * time.Millisecond},
 	})
 
 	manager.Restart(2, true)
@@ -602,7 +666,7 @@ func TestStopClearsWaitingFlagForDependent(t *testing.T) {
 			Command: "sleep 0.3; echo READY; sleep 5",
 			Ready:   regexp.MustCompile("READY"),
 		},
-		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, DependsOnCommands: []string{"core"}},
 	})
 
 	manager.Stop(2, true)

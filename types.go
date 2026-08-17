@@ -19,15 +19,18 @@ type RestartConfig struct {
 }
 
 type CommandInfo struct {
-	ID           int
-	Name         string
-	Command      string
-	Group        string
-	DependsOn    []string
-	Ready        *regexp.Regexp
-	Busy         *regexp.Regexp
-	ReadyTimeout time.Duration
-	Restart      *RestartConfig
+	ID      int
+	Name    string
+	Command string
+	Group   string
+	// DependsOn holds command or group names. DependsOnCommands holds the command
+	// names they resolve to.
+	DependsOn         []string
+	DependsOnCommands []string
+	Ready             *regexp.Regexp
+	Busy              *regexp.Regexp
+	ReadyTimeout      time.Duration
+	Restart           *RestartConfig
 }
 
 type ProcessStatus string
