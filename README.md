@@ -158,13 +158,31 @@ build:
 }
 ```
 
-- `dependsOn`: names of other commands that must become ready first
+- `dependsOn`: names of commands or groups that must become ready first
 - `ready`: regular expression that marks the command as ready
 - `busy`: regular expression that marks the command as busy again
-- `readyTimeout`: milliseconds to wait for a dependency (default 120000)
+- `readyTimeout`: milliseconds to wait for each dependency (default 120000)
 
 Every command that has no unmet dependency starts at once. Each other command starts as soon as its
 dependencies report ready.
+
+A `dependsOn` entry that names a group waits for every command in that group. Use a group to keep
+the config short when many packages build first:
+
+```json
+{
+  "ready": "Found 0 errors\\. Watching for file changes",
+  "commands": {
+    "types": { "command": "tsc -w -p packages/types", "group": "core" },
+    "db": { "command": "tsc -w -p packages/db", "group": "core" },
+    "utils": { "command": "tsc -w -p packages/utils", "group": "core" },
+    "api": { "command": "tsc -w -p apps/api", "dependsOn": ["core"] }
+  }
+}
+```
+
+A name must not be both a command name and a group name. conqr rejects such a config, because the
+dependency is ambiguous.
 
 A command becomes ready in one of three ways:
 

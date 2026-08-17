@@ -86,21 +86,21 @@ func (pm *ProcessManager) StartAll(commands []CommandInfo) {
 	pm.mu.Lock()
 	for _, command := range commands {
 		pm.commands[command.ID] = command
-		if len(command.DependsOn) > 0 {
+		if len(command.DependsOnCommands) > 0 {
 			pm.readyStateFor(command.ID).waiting = true
 		}
 	}
 	pm.mu.Unlock()
 
 	for _, command := range commands {
-		if len(command.DependsOn) == 0 {
+		if len(command.DependsOnCommands) == 0 {
 			pm.StartCommand(command)
 			continue
 		}
 
-		names := make([]string, 0, len(command.DependsOn))
-		ids := make([]int, 0, len(command.DependsOn))
-		for _, name := range command.DependsOn {
+		names := make([]string, 0, len(command.DependsOnCommands))
+		ids := make([]int, 0, len(command.DependsOnCommands))
+		for _, name := range command.DependsOnCommands {
 			if id, ok := idsByName[name]; ok {
 				names = append(names, name)
 				ids = append(ids, id)
@@ -115,16 +115,15 @@ func (pm *ProcessManager) startWhenReady(commandInfo CommandInfo, dependencies [
 	if timeout <= 0 {
 		timeout = defaultReadyTimeout
 	}
-	deadline := time.Now().Add(timeout)
 
-	pm.logBuffer.Add(commandInfo.ID, "› Waiting for "+strings.Join(names, ", "), SourceStdout, true)
+	pm.logBuffer.Add(commandInfo.ID, "› Waiting for "+strings.Join(commandInfo.DependsOn, ", "), SourceStdout, true)
 
 	for index, dependencyID := range dependencies {
 		select {
 		case <-pm.readySignal(dependencyID):
 		case <-pm.shutdownSignal:
 			return
-		case <-time.After(time.Until(deadline)):
+		case <-time.After(timeout):
 			pm.logBuffer.Add(commandInfo.ID, "! "+names[index]+" is not ready, starting anyway", SourceStderr, true)
 			pm.markReady(dependencyID)
 		}

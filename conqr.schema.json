@@ -73,7 +73,7 @@
                 "dependsOn": {
                   "type": "array",
                   "items": { "type": "string" },
-                  "description": "Names of other commands that must become ready before this command starts"
+                  "description": "Names of commands or groups that must become ready before this command starts. A group name waits for every command in that group."
                 },
                 "ready": {
                   "type": "string",
@@ -175,7 +175,8 @@
       "ready": "Found 0 errors\\. Watching for file changes",
       "busy": "File change detected",
       "commands": {
-        "core": { "command": "tsc -w -p packages/core" },
+        "types": { "command": "tsc -w -p packages/types", "group": "core" },
+        "db": { "command": "tsc -w -p packages/db", "group": "core" },
         "emails": { "command": "npm run build:emails", "ready": "" },
         "api": { "command": "tsc -w -p apps/api", "dependsOn": ["core"] },
         "web": {

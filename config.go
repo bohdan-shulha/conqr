@@ -100,6 +100,9 @@ func parseConfig(content []byte) ([]CommandInfo, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if err := resolveDependencies(commands); err != nil {
+		return nil, "", err
+	}
 	if err := validateDependencies(commands); err != nil {
 		return nil, "", err
 	}
@@ -192,18 +195,47 @@ func resolvePattern(global, perProcess *string) (*regexp.Regexp, error) {
 	return regexp.Compile(*pattern)
 }
 
+func resolveDependencies(commands []CommandInfo) error {
+	isCommand := make(map[string]bool, len(commands))
+	members := make(map[string][]string)
+	for _, command := range commands {
+		isCommand[command.Name] = true
+		if command.Group != "" {
+			members[command.Group] = append(members[command.Group], command.Name)
+		}
+	}
+
+	for index := range commands {
+		command := &commands[index]
+		resolved := make([]string, 0, len(command.DependsOn))
+		seen := make(map[string]bool, len(command.DependsOn))
+		for _, dependency := range command.DependsOn {
+			group, isGroup := members[dependency]
+			if isCommand[dependency] && isGroup {
+				return fmt.Errorf("command %q depends on %q, which is both a command and a group", command.Name, dependency)
+			}
+			if !isCommand[dependency] && !isGroup {
+				return fmt.Errorf("command %q depends on unknown command or group %q", command.Name, dependency)
+			}
+			if !isGroup {
+				group = []string{dependency}
+			}
+			for _, name := range group {
+				if !seen[name] {
+					seen[name] = true
+					resolved = append(resolved, name)
+				}
+			}
+		}
+		command.DependsOnCommands = resolved
+	}
+	return nil
+}
+
 func validateDependencies(commands []CommandInfo) error {
 	byName := make(map[string]CommandInfo, len(commands))
 	for _, command := range commands {
 		byName[command.Name] = command
-	}
-
-	for _, command := range commands {
-		for _, dependency := range command.DependsOn {
-			if _, ok := byName[dependency]; !ok {
-				return fmt.Errorf("command %q depends on unknown command %q", command.Name, dependency)
-			}
-		}
 	}
 
 	const (
@@ -223,7 +255,7 @@ func validateDependencies(commands []CommandInfo) error {
 		}
 		state[name] = visiting
 		path = append(path, name)
-		for _, dependency := range byName[name].DependsOn {
+		for _, dependency := range byName[name].DependsOnCommands {
 			if err := visit(dependency); err != nil {
 				return err
 			}

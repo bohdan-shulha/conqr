@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +140,84 @@ func TestParseConfigRejectsDependencyCycle(t *testing.T) {
 	_, _, err := parseConfig(content)
 	if err == nil {
 		t.Fatal("expected dependency cycle to be rejected")
+	}
+	if !strings.Contains(err.Error(), "dependency cycle") {
+		t.Fatalf("expected dependency cycle error, got %v", err)
+	}
+}
+
+func TestParseConfigExpandsGroupDependency(t *testing.T) {
+	content := []byte(`{
+		"commands": {
+			"types": { "command": "tsc -w -p types", "group": "core" },
+			"db": { "command": "tsc -w -p db", "group": "core" },
+			"utils": { "command": "tsc -w -p utils", "group": "core" },
+			"api": { "command": "tsc -w -p api", "dependsOn": ["core"] }
+		}
+	}`)
+
+	commands, _, err := parseConfig(content)
+	if err != nil {
+		t.Fatalf("parseConfig returned error: %v", err)
+	}
+	api := commands[3]
+	if len(api.DependsOn) != 1 || api.DependsOn[0] != "core" {
+		t.Fatalf("expected dependsOn to keep the group name, got %v", api.DependsOn)
+	}
+	want := []string{"types", "db", "utils"}
+	if !slices.Equal(api.DependsOnCommands, want) {
+		t.Fatalf("expected %v, got %v", want, api.DependsOnCommands)
+	}
+}
+
+func TestParseConfigRemovesDuplicateDependency(t *testing.T) {
+	content := []byte(`{
+		"commands": {
+			"types": { "command": "tsc -w -p types", "group": "core" },
+			"db": { "command": "tsc -w -p db", "group": "core" },
+			"api": { "command": "tsc -w -p api", "dependsOn": ["core", "db"] }
+		}
+	}`)
+
+	commands, _, err := parseConfig(content)
+	if err != nil {
+		t.Fatalf("parseConfig returned error: %v", err)
+	}
+	want := []string{"types", "db"}
+	if !slices.Equal(commands[2].DependsOnCommands, want) {
+		t.Fatalf("expected %v, got %v", want, commands[2].DependsOnCommands)
+	}
+}
+
+func TestParseConfigRejectsAmbiguousDependency(t *testing.T) {
+	content := []byte(`{
+		"commands": {
+			"core": "tsc -w",
+			"db": { "command": "tsc -w -p db", "group": "core" },
+			"api": { "command": "tsc -w -p api", "dependsOn": ["core"] }
+		}
+	}`)
+
+	_, _, err := parseConfig(content)
+	if err == nil {
+		t.Fatal("expected an ambiguous dependency to be rejected")
+	}
+	if !strings.Contains(err.Error(), "both a command and a group") {
+		t.Fatalf("expected ambiguous dependency error, got %v", err)
+	}
+}
+
+func TestParseConfigRejectsGroupThatDependsOnItself(t *testing.T) {
+	content := []byte(`{
+		"commands": {
+			"types": { "command": "tsc -w -p types", "group": "core" },
+			"db": { "command": "tsc -w -p db", "group": "core", "dependsOn": ["core"] }
+		}
+	}`)
+
+	_, _, err := parseConfig(content)
+	if err == nil {
+		t.Fatal("expected a group that depends on itself to be rejected")
 	}
 	if !strings.Contains(err.Error(), "dependency cycle") {
 		t.Fatalf("expected dependency cycle error, got %v", err)
