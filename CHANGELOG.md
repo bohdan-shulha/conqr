@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.5.0] - 2026-08-17
+
+- feat(startup): accept a group name in dependsOn (#24)
+
+
 ## [2.4.3] - 2026-08-17
 
 - fix(process-manager): stop a process that you stop while it starts, instead of leaving it to run under the STOP label
