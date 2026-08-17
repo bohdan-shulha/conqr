@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.4.0] - 2026-08-17
+
+- feat(startup): add dependency-ordered startup with readiness detection (#19)- Maintenance release.
+
+
 ## Unreleased
 
 - feat: add dependency-ordered startup with `dependsOn`, `ready`, `busy`, and `readyTimeout`
