@@ -9,6 +9,7 @@
   "files": [
     "dist/conqr-*",
     "npm/conqr.js",
+    "npm/binary-name.js",
     "README.md",
     "CHANGELOG.md",
     "conqr.schema.json"
