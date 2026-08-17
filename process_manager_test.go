@@ -627,3 +627,43 @@ func TestRestartIgnoresUnknownProcess(t *testing.T) {
 		t.Fatal("expected the restart claim to be released for an unknown process")
 	}
 }
+
+func TestStartCommandStopsProcessStoppedWhileStarting(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	manager.mu.Lock()
+	manager.manuallyStopped[1] = true
+	manager.mu.Unlock()
+
+	if err := manager.StartCommand(CommandInfo{ID: 1, Name: "api", Command: "sleep 10"}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusStopped }, 2*time.Second)
+
+	manager.mu.Lock()
+	info := manager.processes[1]
+	manager.mu.Unlock()
+	if isLive(info) {
+		t.Fatal("expected the process to be killed when it starts while stopped")
+	}
+}
+
+func TestStartCommandKeepsProcessThatIsNotStopped(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{ID: 1, Name: "api", Command: "sleep 10"}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusRunning }, time.Second)
+	time.Sleep(200 * time.Millisecond)
+
+	if status := manager.GetStatus(1); status != StatusRunning {
+		t.Fatalf("expected the process to keep running, got %s", status)
+	}
+}

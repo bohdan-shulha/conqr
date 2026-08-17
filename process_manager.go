@@ -267,13 +267,27 @@ func (pm *ProcessManager) StartCommand(commandInfo CommandInfo) error {
 	pm.mu.Lock()
 	pm.processes[commandInfo.ID] = info
 	pm.readyStateFor(commandInfo.ID).building = commandInfo.Ready != nil
+	stoppedWhileStarting := pm.manuallyStopped[commandInfo.ID]
 	pm.mu.Unlock()
 
 	go pm.consumePipe(commandInfo.ID, stdout, SourceStdout)
 	go pm.consumePipe(commandInfo.ID, stderr, SourceStderr)
 	go pm.waitForExit(info)
 
+	if stoppedWhileStarting {
+		pm.stopAfterStart(info)
+	}
+
 	return nil
+}
+
+func (pm *ProcessManager) stopAfterStart(info *processInfo) {
+	pm.mu.Lock()
+	stop := pm.manuallyStopped[info.ID] && pm.processes[info.ID] == info
+	pm.mu.Unlock()
+	if stop {
+		pm.killOne(info)
+	}
 }
 
 func shellCommand(command string) *exec.Cmd {
