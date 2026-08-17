@@ -107,9 +107,9 @@ jobs:
               echo "## [$VERSION] - $(date -u +%Y-%m-%d)"
               echo
               if [ -n "$RANGE" ]; then
-                git log "$RANGE" --pretty=format:"- %s" --no-merges
+                git log "$RANGE" --pretty="- %s" --no-merges
               else
-                git log --pretty=format:"- %s" --no-merges
+                git log --pretty="- %s" --no-merges
               fi
             } > /tmp/conqr-release-notes.md
 
