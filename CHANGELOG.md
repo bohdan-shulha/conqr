@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.4.1] - 2026-08-17
+
+- fix(npm): resolve bundled binary on x64 hosts (#20)- Maintenance release.
+
+
 ## [2.4.0] - 2026-08-17
 
 - feat(startup): add dependency-ordered startup with readiness detection (#19)- Maintenance release.
