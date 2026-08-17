@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [2.4.2] - 2026-08-17
 
 - fix(process-manager): remove the data race on the process state that `go test -race` reports
 - fix(process-manager): let `r` start a process that you stop while it waits for a dependency
