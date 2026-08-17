@@ -78,6 +78,7 @@ var (
 	upStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00"))
 	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffaa00"))
 	downStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff0000"))
+	buildStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#55ffff"))
 	systemStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#ffffff")).
 			Background(lipgloss.Color("#2a2a2a")).
@@ -471,6 +472,9 @@ func statusRow(name, status string, width int, selected bool, statusColor string
 	if statusColor == "#ff0000" {
 		return base + downStyle.Width(statusWidth).Render(statusText)
 	}
+	if statusColor == "#55ffff" {
+		return base + buildStyle.Width(statusWidth).Render(statusText)
+	}
 	return base + lipgloss.NewStyle().Foreground(lipgloss.Color("#d7d7d7")).Width(statusWidth).Render(statusText)
 }
 
@@ -685,14 +689,21 @@ func (t TUI) commandStatus(commandIndex int) (string, string) {
 	command := t.commands[commandIndex]
 	status := t.processManager.GetStatus(command.ID)
 	state := t.processManager.RestartState(command.ID)
+	readiness := t.processManager.Readiness(command.ID)
 	if t.processManager.IsManuallyStopped(command.ID) {
 		return "STOP", "#888888"
 	}
-	if status == StatusRunning {
-		return "UP", "#00ff00"
+	if readiness.Waiting {
+		return "WAIT", ""
 	}
 	if status == StatusError {
 		return "ERROR", "#ffaa00"
+	}
+	if status == StatusRunning && readiness.Building {
+		return "BUILD", "#55ffff"
+	}
+	if status == StatusRunning {
+		return "UP", "#00ff00"
 	}
 	if state.IsRestarting && status != StatusRunning {
 		return "› DOWN", "#ff0000"
@@ -707,6 +718,8 @@ func (t TUI) aggregateStatus(commandIndices []int) (string, string) {
 
 	hasError := false
 	hasDown := false
+	hasWaiting := false
+	hasBuilding := false
 	allStopped := true
 	allRunning := true
 
@@ -714,6 +727,7 @@ func (t TUI) aggregateStatus(commandIndices []int) (string, string) {
 		command := t.commands[index]
 		status := t.processManager.GetStatus(command.ID)
 		state := t.processManager.RestartState(command.ID)
+		readiness := t.processManager.Readiness(command.ID)
 		stopped := t.processManager.IsManuallyStopped(command.ID)
 
 		if status == StatusError {
@@ -725,7 +739,13 @@ func (t TUI) aggregateStatus(commandIndices []int) (string, string) {
 		if !stopped {
 			allStopped = false
 		}
-		if status != StatusRunning && status != StatusError && !stopped {
+		if readiness.Waiting {
+			hasWaiting = true
+		}
+		if readiness.Building {
+			hasBuilding = true
+		}
+		if status != StatusRunning && status != StatusError && !stopped && !readiness.Waiting {
 			hasDown = true
 		}
 		if state.IsRestarting && status != StatusRunning {
@@ -739,11 +759,17 @@ func (t TUI) aggregateStatus(commandIndices []int) (string, string) {
 	if allStopped {
 		return "STOP", "#888888"
 	}
-	if allRunning {
-		return "UP", "#00ff00"
-	}
 	if hasDown {
 		return "DOWN", "#ff0000"
+	}
+	if hasWaiting {
+		return "WAIT", ""
+	}
+	if hasBuilding {
+		return "BUILD", "#55ffff"
+	}
+	if allRunning {
+		return "UP", "#00ff00"
 	}
 	return "---", ""
 }

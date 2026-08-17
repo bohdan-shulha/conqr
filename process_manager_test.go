@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -265,4 +266,219 @@ func TestRestartClearsManualStop(t *testing.T) {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func logContains(buffer *LogBuffer, processID int, needle string) bool {
+	for _, entry := range buffer.Logs(processID) {
+		if strings.Contains(entry.Line, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestStartAllWaitsForDependencyReadyLine(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	manager.StartAll([]CommandInfo{
+		{
+			ID:      1,
+			Name:    "core",
+			Command: "sleep 0.4; echo READY; sleep 5",
+			Ready:   regexp.MustCompile("READY"),
+		},
+		{
+			ID:        2,
+			Name:      "api",
+			Command:   "sleep 5",
+			DependsOn: []string{"core"},
+		},
+	})
+
+	time.Sleep(100 * time.Millisecond)
+	if got := countStartLogs(logBuffer, 2); got != 0 {
+		t.Fatalf("expected dependent to wait, got %d start logs", got)
+	}
+	if readiness := manager.Readiness(2); !readiness.Waiting {
+		t.Fatalf("expected dependent to be waiting, got %+v", readiness)
+	}
+	if readiness := manager.Readiness(1); !readiness.Building {
+		t.Fatalf("expected dependency to be building, got %+v", readiness)
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(2) == StatusRunning }, 2*time.Second)
+
+	if readiness := manager.Readiness(1); readiness.Building {
+		t.Fatalf("expected dependency to leave building state, got %+v", readiness)
+	}
+	if readiness := manager.Readiness(2); readiness.Waiting {
+		t.Fatalf("expected dependent to leave waiting state, got %+v", readiness)
+	}
+}
+
+func TestStartAllStartsDependentAfterZeroExit(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	manager.StartAll([]CommandInfo{
+		{ID: 1, Name: "emails", Command: shellSleepCommand(200*time.Millisecond, 0)},
+		{ID: 2, Name: "web", Command: "sleep 5", DependsOn: []string{"emails"}},
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	if got := countStartLogs(logBuffer, 2); got != 0 {
+		t.Fatalf("expected dependent to wait, got %d start logs", got)
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(2) == StatusRunning }, 2*time.Second)
+}
+
+func TestStartAllStartsDependentAfterReadyTimeout(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	manager.StartAll([]CommandInfo{
+		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
+		{
+			ID:           2,
+			Name:         "api",
+			Command:      "sleep 5",
+			DependsOn:    []string{"core"},
+			ReadyTimeout: 300 * time.Millisecond,
+		},
+	})
+
+	time.Sleep(100 * time.Millisecond)
+	if got := countStartLogs(logBuffer, 2); got != 0 {
+		t.Fatalf("expected dependent to wait, got %d start logs", got)
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(2) == StatusRunning }, 2*time.Second)
+
+	if !logContains(logBuffer, 2, "core is not ready") {
+		t.Fatal("expected a timeout warning in the dependent log")
+	}
+}
+
+func TestReadyTimeoutUnblocksEveryWaiter(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	manager.StartAll([]CommandInfo{
+		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}, ReadyTimeout: 300 * time.Millisecond},
+		{ID: 3, Name: "web", Command: "sleep 5", DependsOn: []string{"core"}, ReadyTimeout: 10 * time.Second},
+	})
+
+	waitUntil(t, func() bool {
+		return manager.GetStatus(2) == StatusRunning && manager.GetStatus(3) == StatusRunning
+	}, 2*time.Second)
+}
+
+func TestKillAllReleasesWaitingDependent(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+
+	manager.StartAll([]CommandInfo{
+		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}},
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	manager.KillAll()
+	time.Sleep(200 * time.Millisecond)
+
+	if got := countStartLogs(logBuffer, 2); got != 0 {
+		t.Fatalf("expected waiting dependent to never start, got %d start logs", got)
+	}
+}
+
+func TestStopCancelsPendingDependentStart(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	manager.StartAll([]CommandInfo{
+		{
+			ID:      1,
+			Name:    "core",
+			Command: "sleep 0.3; echo READY; sleep 5",
+			Ready:   regexp.MustCompile("READY"),
+		},
+		{ID: 2, Name: "api", Command: "sleep 5", DependsOn: []string{"core"}},
+	})
+
+	manager.Stop(2, true)
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusRunning }, time.Second)
+	time.Sleep(500 * time.Millisecond)
+
+	if got := countStartLogs(logBuffer, 2); got != 0 {
+		t.Fatalf("expected stopped dependent to never start, got %d start logs", got)
+	}
+}
+
+func TestBusyPatternReturnsProcessToBuilding(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "core",
+		Command: "echo READY; sleep 0.3; echo REBUILD; sleep 5",
+		Ready:   regexp.MustCompile("READY"),
+		Busy:    regexp.MustCompile("REBUILD"),
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return !manager.Readiness(1).Building }, time.Second)
+	waitUntil(t, func() bool { return manager.Readiness(1).Building }, 2*time.Second)
+}
+
+func TestMarkReadyIsIdempotent(t *testing.T) {
+	manager := NewProcessManager(NewLogBuffer())
+
+	manager.markReady(1)
+	manager.markReady(1)
+
+	select {
+	case <-manager.readySignal(1):
+	default:
+		t.Fatal("expected the ready signal to be closed")
+	}
+}
+
+func TestRestartPreservesCommandConfiguration(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "core",
+		Command: "sleep 5",
+		Group:   "services",
+		Ready:   regexp.MustCompile("READY"),
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusRunning }, time.Second)
+	manager.Restart(1, true)
+	waitUntil(t, func() bool { return manager.GetStatus(1) == StatusRunning }, 2*time.Second)
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.processes[1].Group != "services" {
+		t.Fatalf("expected group to survive a restart, got %q", manager.processes[1].Group)
+	}
+	if manager.processes[1].Ready == nil {
+		t.Fatal("expected ready pattern to survive a restart")
+	}
 }

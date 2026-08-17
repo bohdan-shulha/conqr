@@ -28,11 +28,25 @@ type RestartState struct {
 	CrashCount   int
 }
 
+type Readiness struct {
+	Waiting  bool
+	Building bool
+}
+
+type readyState struct {
+	signal   chan struct{}
+	ready    bool
+	building bool
+	waiting  bool
+}
+
 type ProcessManager struct {
 	mu                      sync.Mutex
 	processes               map[int]*processInfo
 	logBuffer               *LogBuffer
 	shuttingDown            bool
+	shutdownSignal          chan struct{}
+	readyStates             map[int]*readyState
 	restartTimers           map[int]*time.Timer
 	restartCounts           map[int]int
 	crashCounts             map[int]int
@@ -47,6 +61,8 @@ func NewProcessManager(logBuffer *LogBuffer) *ProcessManager {
 	return &ProcessManager{
 		processes:               make(map[int]*processInfo),
 		logBuffer:               logBuffer,
+		shutdownSignal:          make(chan struct{}),
+		readyStates:             make(map[int]*readyState),
 		restartTimers:           make(map[int]*time.Timer),
 		restartCounts:           make(map[int]int),
 		crashCounts:             make(map[int]int),
@@ -59,9 +75,109 @@ func NewProcessManager(logBuffer *LogBuffer) *ProcessManager {
 }
 
 func (pm *ProcessManager) StartAll(commands []CommandInfo) {
+	idsByName := make(map[string]int, len(commands))
 	for _, command := range commands {
-		pm.StartCommand(command)
+		idsByName[command.Name] = command.ID
 	}
+
+	for _, command := range commands {
+		if len(command.DependsOn) > 0 {
+			pm.markWaiting(command.ID, true)
+		}
+	}
+
+	for _, command := range commands {
+		if len(command.DependsOn) == 0 {
+			pm.StartCommand(command)
+			continue
+		}
+
+		names := make([]string, 0, len(command.DependsOn))
+		ids := make([]int, 0, len(command.DependsOn))
+		for _, name := range command.DependsOn {
+			if id, ok := idsByName[name]; ok {
+				names = append(names, name)
+				ids = append(ids, id)
+			}
+		}
+		go pm.startWhenReady(command, ids, names)
+	}
+}
+
+func (pm *ProcessManager) startWhenReady(commandInfo CommandInfo, dependencies []int, names []string) {
+	timeout := commandInfo.ReadyTimeout
+	if timeout <= 0 {
+		timeout = defaultReadyTimeout
+	}
+	deadline := time.Now().Add(timeout)
+
+	pm.logBuffer.Add(commandInfo.ID, "› Waiting for "+strings.Join(names, ", "), SourceStdout, true)
+
+	for index, dependencyID := range dependencies {
+		select {
+		case <-pm.readySignal(dependencyID):
+		case <-pm.shutdownSignal:
+			return
+		case <-time.After(time.Until(deadline)):
+			pm.logBuffer.Add(commandInfo.ID, "! "+names[index]+" is not ready, starting anyway", SourceStderr, true)
+			pm.markReady(dependencyID)
+		}
+	}
+
+	if pm.IsManuallyStopped(commandInfo.ID) {
+		return
+	}
+	pm.markWaiting(commandInfo.ID, false)
+	_ = pm.StartCommand(commandInfo)
+}
+
+func (pm *ProcessManager) readyStateFor(processID int) *readyState {
+	state := pm.readyStates[processID]
+	if state == nil {
+		state = &readyState{signal: make(chan struct{})}
+		pm.readyStates[processID] = state
+	}
+	return state
+}
+
+func (pm *ProcessManager) readySignal(processID int) chan struct{} {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.readyStateFor(processID).signal
+}
+
+func (pm *ProcessManager) markReady(processID int) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	state := pm.readyStateFor(processID)
+	state.building = false
+	if state.ready {
+		return
+	}
+	state.ready = true
+	close(state.signal)
+}
+
+func (pm *ProcessManager) markBuilding(processID int) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.readyStateFor(processID).building = true
+}
+
+func (pm *ProcessManager) markWaiting(processID int, waiting bool) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.readyStateFor(processID).waiting = waiting
+}
+
+func (pm *ProcessManager) Readiness(processID int) Readiness {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	state := pm.readyStates[processID]
+	if state == nil {
+		return Readiness{}
+	}
+	return Readiness{Waiting: state.waiting, Building: state.building}
 }
 
 func (pm *ProcessManager) StartCommand(commandInfo CommandInfo) error {
@@ -106,6 +222,7 @@ func (pm *ProcessManager) StartCommand(commandInfo CommandInfo) error {
 			RunID:       runID,
 		}
 		pm.mu.Unlock()
+		pm.markReady(commandInfo.ID)
 		return err
 	}
 
@@ -121,6 +238,7 @@ func (pm *ProcessManager) StartCommand(commandInfo CommandInfo) error {
 
 	pm.mu.Lock()
 	pm.processes[commandInfo.ID] = info
+	pm.readyStateFor(commandInfo.ID).building = commandInfo.Ready != nil
 	pm.mu.Unlock()
 
 	go pm.consumePipe(commandInfo.ID, stdout, SourceStdout)
@@ -144,6 +262,7 @@ func (pm *ProcessManager) consumePipe(processID int, reader io.Reader, source Lo
 		line = strings.TrimRight(line, "\r\n")
 		if line != "" {
 			pm.logBuffer.Add(processID, line, source, false)
+			pm.checkReadiness(processID, line)
 			pm.checkRecentErrors(processID)
 		}
 		if err != nil {
@@ -179,6 +298,10 @@ func (pm *ProcessManager) waitForExit(processID int, cmd *exec.Cmd, runID int) {
 	shuttingDown := pm.shuttingDown
 	manuallyStopped := pm.manuallyStopped[processID]
 	pm.mu.Unlock()
+
+	if code != nil && *code == 0 {
+		pm.markReady(processID)
+	}
 
 	willRestart := false
 	if restartConfig != nil && !wasIntentional && !shuttingDown && !manuallyStopped {
@@ -299,7 +422,10 @@ func (pm *ProcessManager) KillAllForExit(timeout time.Duration) {
 
 func (pm *ProcessManager) beginShutdown() []*processInfo {
 	pm.mu.Lock()
-	pm.shuttingDown = true
+	if !pm.shuttingDown {
+		pm.shuttingDown = true
+		close(pm.shutdownSignal)
+	}
 	for _, timer := range pm.restartTimers {
 		timer.Stop()
 	}
@@ -427,12 +553,7 @@ func (pm *ProcessManager) Restart(processID int, manual bool) {
 	}
 	pm.restartCounts[processID]++
 	pm.isRestarting[processID] = false
-	replacement := CommandInfo{
-		ID:      info.ID,
-		Name:    info.Name,
-		Command: info.Command,
-		Restart: info.Restart,
-	}
+	replacement := info.CommandInfo
 	pm.mu.Unlock()
 
 	_ = pm.StartCommand(replacement)
@@ -573,6 +694,26 @@ func detectError(line string) bool {
 		}
 	}
 	return false
+}
+
+func (pm *ProcessManager) checkReadiness(processID int, line string) {
+	pm.mu.Lock()
+	info := pm.processes[processID]
+	if info == nil || (info.Ready == nil && info.Busy == nil) {
+		pm.mu.Unlock()
+		return
+	}
+	ready, busy := info.Ready, info.Busy
+	pm.mu.Unlock()
+
+	plain := stripANSI(line)
+	if busy != nil && busy.MatchString(plain) {
+		pm.markBuilding(processID)
+		return
+	}
+	if ready != nil && ready.MatchString(plain) {
+		pm.markReady(processID)
+	}
 }
 
 func (pm *ProcessManager) checkRecentErrors(processID int) {

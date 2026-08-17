@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- feat: add dependency-ordered startup with `dependsOn`, `ready`, `busy`, and `readyTimeout`
+- feat(tui): add the `WAIT` and `BUILD` status labels
+- fix: keep the group and the command configuration after a restart
+
 ## [2.3.0] - 2026-06-07
 
 - chore: release v2.1.0
