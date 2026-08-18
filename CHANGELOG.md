@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.6.0] - 2026-08-18
+
+- feat(process-manager): log the reason and the duration of each build
+
+
 ## [2.5.0] - 2026-08-17
 
 - feat(startup): accept a group name in dependsOn (#24)

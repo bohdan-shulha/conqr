@@ -212,9 +212,14 @@ Sidebar labels:
 | `DOWN` | The command is not running |
 | `STOP` | You stopped the command with `s` |
 
+conqr writes the build state into the log. When an output line matches `busy`, conqr writes
+`› Build started:` and the line that matched. When the command becomes ready, conqr writes
+`› Ready in` and the time in seconds.
+
 conqr removes the startup waterfall. conqr cannot remove the rebuild cascade after startup, because
 each watch process rebuilds on its own. To remove that cascade, replace the separate watch processes
-with one incremental build, for example `tsc -b --watch` over TypeScript project references.
+with one incremental build, for example `tsc -b --watch` over TypeScript project references. Select
+"All processes" to read the rebuild sequence in time order and find the process that starts it.
 
 ### JSON Schema
 

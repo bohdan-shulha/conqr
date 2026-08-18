@@ -277,6 +277,16 @@ func logContains(buffer *LogBuffer, processID int, needle string) bool {
 	return false
 }
 
+func countLogs(buffer *LogBuffer, processID int, needle string) int {
+	count := 0
+	for _, entry := range buffer.Logs(processID) {
+		if strings.Contains(entry.Line, needle) {
+			count++
+		}
+	}
+	return count
+}
+
 func TestStartAllWaitsForDependencyReadyLine(t *testing.T) {
 	logBuffer := NewLogBuffer()
 	manager := NewProcessManager(logBuffer)
@@ -729,5 +739,135 @@ func TestStartCommandKeepsProcessThatIsNotStopped(t *testing.T) {
 
 	if status := manager.GetStatus(1); status != StatusRunning {
 		t.Fatalf("expected the process to keep running, got %s", status)
+	}
+}
+
+func TestBusyLineLogsTheBuildReason(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "core",
+		Command: `echo READY; sleep 0.2; echo "File change detected"; sleep 5`,
+		Ready:   regexp.MustCompile("READY"),
+		Busy:    regexp.MustCompile("File change detected"),
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return !manager.Readiness(1).Building }, time.Second)
+	waitUntil(t, func() bool { return manager.Readiness(1).Building }, 2*time.Second)
+
+	if !logContains(logBuffer, 1, "› Build started: File change detected") {
+		t.Fatal("expected the build start log to name the line that matched busy")
+	}
+}
+
+func TestBusyLineLogsTheBuildStartOnlyOnce(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "core",
+		Command: "echo READY; sleep 0.2; echo REBUILD; echo REBUILD; sleep 5",
+		Ready:   regexp.MustCompile("READY"),
+		Busy:    regexp.MustCompile("REBUILD"),
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return !manager.Readiness(1).Building }, time.Second)
+	waitUntil(t, func() bool { return manager.Readiness(1).Building }, 2*time.Second)
+	time.Sleep(200 * time.Millisecond)
+
+	if got := countLogs(logBuffer, 1, "› Build started"); got != 1 {
+		t.Fatalf("expected one build start log, got %d", got)
+	}
+}
+
+func TestReadyLineLogsTheBuildDuration(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "core",
+		Command: "sleep 0.2; echo READY; sleep 5",
+		Ready:   regexp.MustCompile("READY"),
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return !manager.Readiness(1).Building }, 2*time.Second)
+
+	if !logContains(logBuffer, 1, "› Ready in ") {
+		t.Fatal("expected a ready duration log after the ready line")
+	}
+}
+
+func TestStartDoesNotLogABuildStart(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "core",
+		Command: "sleep 5",
+		Ready:   regexp.MustCompile("NEVER"),
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return manager.Readiness(1).Building }, time.Second)
+
+	if logContains(logBuffer, 1, "Build started") {
+		t.Fatal("expected no build start log for a process that only starts")
+	}
+}
+
+func TestCleanExitLogsTheBuildDuration(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	if err := manager.StartCommand(CommandInfo{
+		ID:      1,
+		Name:    "emails",
+		Command: shellSleepCommand(100*time.Millisecond, 0),
+		Ready:   regexp.MustCompile("NEVER"),
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	waitUntil(t, func() bool { return logContains(logBuffer, 1, "› Ready in ") }, 2*time.Second)
+}
+
+func TestReadyTimeoutDoesNotLogTheBuildDuration(t *testing.T) {
+	logBuffer := NewLogBuffer()
+	manager := NewProcessManager(logBuffer)
+	defer manager.KillAll()
+
+	manager.StartAll([]CommandInfo{
+		{ID: 1, Name: "core", Command: "sleep 10", Ready: regexp.MustCompile("NEVER")},
+		{
+			ID:                2,
+			Name:              "api",
+			Command:           "sleep 5",
+			DependsOn:         []string{"core"},
+			DependsOnCommands: []string{"core"},
+			ReadyTimeout:      300 * time.Millisecond,
+		},
+	})
+
+	waitUntil(t, func() bool { return manager.GetStatus(2) == StatusRunning }, 2*time.Second)
+
+	if logContains(logBuffer, 1, "Ready in ") {
+		t.Fatal("expected no ready duration log for a dependency that hit the timeout")
 	}
 }
