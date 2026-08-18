@@ -35,10 +35,11 @@ type Readiness struct {
 }
 
 type readyState struct {
-	signal   chan struct{}
-	ready    bool
-	building bool
-	waiting  bool
+	signal     chan struct{}
+	ready      bool
+	building   bool
+	waiting    bool
+	buildStart time.Time
 }
 
 type ProcessManager struct {
@@ -169,22 +170,33 @@ func (pm *ProcessManager) readySignal(processID int) chan struct{} {
 	return pm.readyStateFor(processID).signal
 }
 
-func (pm *ProcessManager) markReady(processID int) {
+func (pm *ProcessManager) markReady(processID int) time.Duration {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	state := pm.readyStateFor(processID)
-	state.building = false
+	elapsed := time.Duration(0)
+	if state.building {
+		elapsed = time.Since(state.buildStart)
+		state.building = false
+	}
 	if state.ready {
-		return
+		return elapsed
 	}
 	state.ready = true
 	close(state.signal)
+	return elapsed
 }
 
-func (pm *ProcessManager) markBuilding(processID int) {
+func (pm *ProcessManager) markBuilding(processID int) bool {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-	pm.readyStateFor(processID).building = true
+	state := pm.readyStateFor(processID)
+	if state.building {
+		return false
+	}
+	state.building = true
+	state.buildStart = time.Now()
+	return true
 }
 
 func (pm *ProcessManager) markWaiting(processID int, waiting bool) {
@@ -265,7 +277,9 @@ func (pm *ProcessManager) StartCommand(commandInfo CommandInfo) error {
 
 	pm.mu.Lock()
 	pm.processes[commandInfo.ID] = info
-	pm.readyStateFor(commandInfo.ID).building = commandInfo.Ready != nil
+	state := pm.readyStateFor(commandInfo.ID)
+	state.building = commandInfo.Ready != nil
+	state.buildStart = time.Now()
 	stoppedWhileStarting := pm.manuallyStopped[commandInfo.ID]
 	pm.mu.Unlock()
 
@@ -343,7 +357,9 @@ func (pm *ProcessManager) waitForExit(info *processInfo) {
 	pm.mu.Unlock()
 
 	if code != nil && *code == 0 {
-		pm.markReady(processID)
+		if elapsed := pm.markReady(processID); elapsed > 0 {
+			pm.logBuffer.Add(processID, formatReadyMessage(elapsed), SourceStdout, true)
+		}
 	}
 
 	willRestart := false
@@ -370,6 +386,10 @@ func exitCode(err error) *int {
 		return &code
 	}
 	return nil
+}
+
+func formatReadyMessage(elapsed time.Duration) string {
+	return fmt.Sprintf("› Ready in %.1fs", elapsed.Seconds())
 }
 
 func formatExitMessage(code *int) string {
@@ -768,11 +788,15 @@ func (pm *ProcessManager) checkReadiness(processID int, line string) {
 
 	plain := stripANSI(line)
 	if busy != nil && busy.MatchString(plain) {
-		pm.markBuilding(processID)
+		if pm.markBuilding(processID) {
+			pm.logBuffer.Add(processID, "› Build started: "+plain, SourceStdout, true)
+		}
 		return
 	}
 	if ready != nil && ready.MatchString(plain) {
-		pm.markReady(processID)
+		if elapsed := pm.markReady(processID); elapsed > 0 {
+			pm.logBuffer.Add(processID, formatReadyMessage(elapsed), SourceStdout, true)
+		}
 	}
 }
 
